@@ -2,6 +2,8 @@ import db from '../database.js';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import Together from 'together-ai';
+import newsAnalysisService from './newsAnalysisService.js';
+import toolRegistryService from './toolRegistryService.js';
 
 dotenv.config();
 
@@ -240,9 +242,20 @@ class AgentBrainService {
     const activeCampaigns = await this.getActiveCampaigns();
     console.log(`Retrieved ${activeCampaigns.length} active campaigns`);
     
+    // Ensure we have fresh news and get recent articles
+    await newsAnalysisService.ensureFreshNews();
+    const recentNews = await newsAnalysisService.getRecentNews(3);
+    console.log(`Retrieved ${recentNews.length} recent news articles`);
+    
+    // Get recent agent actions
+    const recentActions = await toolRegistryService.getRecentActions(7);
+    console.log(`Retrieved ${recentActions.length} recent agent actions`);
+    
     return {
       recentTweets,
       activeCampaigns,
+      recentNews,
+      recentActions,
       currentTime: new Date().toISOString()
     };
   }
@@ -272,7 +285,7 @@ class AgentBrainService {
   }
 
   generatePrompt(context, personality) {
-    const { recentTweets, activeCampaigns, currentTime } = context;
+    const { recentTweets, activeCampaigns, recentNews, recentActions, currentTime } = context;
     
     // Format recent tweets
     const tweetSection = recentTweets.length > 0 
@@ -284,14 +297,49 @@ class AgentBrainService {
       ? `Active campaigns:\n${activeCampaigns.map(c => `- ${c.title}: ${c.description}`).join('\n')}`
       : 'No active campaigns.';
     
+    // Format recent news
+    const newsSection = recentNews.length > 0
+      ? `Recent Web3 News:\n${recentNews.map(n => `- ${n.title} (${n.source}, ${new Date(n.published_at).toLocaleDateString()})\n  Summary: ${n.content.substring(0, 150)}...`).join('\n\n')}`
+      : 'No recent news available.';
+    
+    // Format recent actions
+    const actionsSection = recentActions.length > 0
+      ? `Recent actions:\n${recentActions.map(a => {
+          const date = new Date(a.created_at).toLocaleString();
+          if (a.action_type === 'tool_execution') {
+            return `- [${date}] Used tool: ${a.tool_name} with parameters: ${a.parameters}. Status: ${a.status}`;
+          } else {
+            return `- [${date}] ${a.action_type}: ${a.status}`;
+          }
+        }).join('\n')}`
+      : 'No recent actions.';
+    
+    // Get available tools
+    const tools = toolRegistryService.tools;
+    const toolsSection = tools.size > 0
+      ? `Available tools:\n${Array.from(tools.entries()).map(([name, config]) => 
+          `- ${name}: ${config.description}\n  Usage: ${config.usage_format || `ACTION: ${name}\nPARAMETERS: {}\nREASON: Explain why you're using this tool`}`
+        ).join('\n\n')}`
+      : 'No tools available.';
+    
     return `${personality || 'You are a helpful DevRel agent.'}\n\n
 Current time: ${currentTime}\n\n
 ${tweetSection}\n\n
 ${campaignSection}\n\n
+${newsSection}\n\n
+${actionsSection}\n\n
+${toolsSection}\n\n
 Based on the above information, please perform one of the following tasks:
 1. Generate a tweet about recent developments in Base L2 network or Web3
 2. Create a bounty for content creators to promote Base L2
 3. Analyze recent engagement and suggest content strategy
+4. Use a tool to gather more information
+5. Send funds on chain for fulfilled bounties
+
+If you need to use a tool, use the following format:
+ACTION: ToolName
+PARAMETERS: {"param1": "value1", "param2": "value2"}
+REASON: Brief explanation of why you're using this tool
 
 Choose the most appropriate task and provide your response.`;
   }
@@ -376,6 +424,40 @@ Choose the most appropriate task and provide your response.`;
       await this.createBounty(response);
     }
     
+    // Check for structured tool usage
+    const actionMatch = response.match(/ACTION:\s*(\w+)/i);
+    const paramsMatch = response.match(/PARAMETERS:\s*({.*?})/is);
+    const reasonMatch = response.match(/REASON:\s*(.*?)(?:\n|$)/is);
+    
+    if (actionMatch && actionMatch[1]) {
+      const toolName = actionMatch[1];
+      let params = {};
+      
+      // Parse parameters if provided
+      if (paramsMatch && paramsMatch[1]) {
+        try {
+          params = JSON.parse(paramsMatch[1]);
+        } catch (error) {
+          console.error('Error parsing tool parameters:', error);
+          await this.logAgentThought('error', `Error parsing tool parameters: ${error.message}`, 'system');
+        }
+      }
+      
+      const reason = reasonMatch && reasonMatch[1] ? reasonMatch[1].trim() : 'No reason provided';
+      
+      // Log the tool usage
+      await this.logAgentThought('tool', `Using tool: ${toolName} with params: ${JSON.stringify(params)}. Reason: ${reason}`, 'system');
+      
+      // Execute the tool
+      try {
+        const result = await toolRegistryService.executeTool(toolName, params);
+        await this.logAgentThought('system', `Tool ${toolName} executed successfully: ${JSON.stringify(result)}`, 'system');
+      } catch (error) {
+        console.error(`Error executing tool ${toolName}:`, error);
+        await this.logAgentThought('error', `Error executing tool ${toolName}: ${error.message}`, 'system');
+      }
+    }
+    
     return true;
   }
 
@@ -421,15 +503,15 @@ Choose the most appropriate task and provide your response.`;
       
       // Insert into campaigns table without user_id
       return new Promise((resolve, reject) => {
+        const now = new Date().toISOString();
         db.run(
-          'INSERT INTO campaigns (title, description, status, reward, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          'INSERT INTO campaigns (title, description, status, reward, created_at) VALUES (?, ?, ?, ?, ?)',
           [
             title,
             description,
             'active',
             '100 BASE', // Default reward
-            new Date().toISOString(),
-            new Date().toISOString()
+            now
           ],
           function(err) {
             if (err) {
@@ -486,6 +568,7 @@ Choose the most appropriate task and provide your response.`;
       console.log('Generating prompt for force run...');
       const prompt = this.generatePrompt(context, config.personality);
       console.log('Prompt generated, length:', prompt.length);
+      console.log('Prompt generated:', prompt);
       
       // Log the input
       console.log('Logging agent input thought for force run...');

@@ -83,20 +83,3 @@ export function updateCampaignsTable() {
     });
   });
 }
-
-export const updateCampaignsTable = () => {
-  return new Promise((resolve, reject) => {
-    db.run(`ALTER TABLE campaigns ADD COLUMN reward TEXT;`, (err) => {
-      if (err) {
-        // Column might already exist, which is fine
-        if (err.message.includes('duplicate column name')) {
-          resolve();
-        } else {
-          reject(err);
-        }
-      } else {
-        resolve();
-      }
-    });
-  });
-}; 

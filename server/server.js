@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import db from './database.js';
 import { runMigrations } from './database/migrations.js';
+import toolRegistryService from './services/toolRegistryService.js';
 
 // Get current file path (ES Modules equivalent of __dirname)
 const __filename = fileURLToPath(import.meta.url);
@@ -34,15 +35,23 @@ import tweetRoutes from './routes/tweets.js';
 import analyticsRoutes from './routes/analytics.js';
 import campaignRoutes from './routes/campaigns.js';
 import agentRoutes from './routes/agent.js';
+import newsRoutes from './routes/news.js';
+import toolRoutes from './routes/tools.js';
 
 // Use routes
 app.use('/api/tweets', tweetRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/agent', agentRoutes);
+app.use('/api/news', newsRoutes);
+app.use('/api/tools', toolRoutes);
 
 // Initialize agent brain service
 console.log('Initializing agent brain service...');
+// The service will self-initialize when imported
+
+// Initialize tool registry service
+console.log('Initializing tool registry service...');
 // The service will self-initialize when imported
 
 // Error handling middleware
