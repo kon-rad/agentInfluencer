@@ -1,5 +1,5 @@
 import express from 'express';
-import db from '../server.js';
+import db from '../database.js';
 import agentBrainService from '../services/agentBrainService.js';
 
 const router = express.Router();
@@ -10,85 +10,40 @@ const skipAuth = (req, res, next) => {
 };
 
 // Get agent status
-router.get('/status', skipAuth, (req, res) => {
-  // Get agent configuration
-  db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, config) => {
-    if (err) return res.status(500).json({ message: err.message });
-    
-    // Get active campaigns count
-    db.get(
-      'SELECT COUNT(*) as active_campaigns FROM campaigns WHERE status = ?',
-      ['active'],
-      (err, campaignData) => {
-        if (err) return res.status(500).json({ message: err.message });
-        
-        // Get recent agent thoughts
-        db.all(
-          `SELECT * FROM agent_thoughts 
-           ORDER BY timestamp DESC LIMIT 5`,
-          [],
-          (err, thoughts) => {
-            if (err) return res.status(500).json({ message: err.message });
-            
-            // Get scheduled tweets count
-            db.get(
-              `SELECT COUNT(*) as scheduled_tweets 
-               FROM tweets 
-               WHERE scheduled_for > datetime('now') AND published_at IS NULL`,
-              [],
-              (err, tweetData) => {
-                if (err) return res.status(500).json({ message: err.message });
-                
-                res.json({
-                  status: config.is_running ? 'active' : 'idle',
-                  active_campaigns: campaignData.active_campaigns,
-                  scheduled_tweets: tweetData.scheduled_tweets,
-                  recent_activity: thoughts,
-                  config: {
-                    personality: config.personality,
-                    frequency: config.frequency,
-                    model_name: config.model_name,
-                    last_run: config.last_run
-                  }
-                });
-              }
-            );
-          }
-        );
-      }
-    );
+router.get('/status', (req, res) => {
+  db.get('SELECT is_running FROM agent_config WHERE id = 1', [], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(row || { is_running: false });
   });
 });
 
-// Toggle agent status (start/stop)
-router.post('/toggle', skipAuth, (req, res) => {
-  db.get('SELECT is_running FROM agent_config WHERE id = 1', [], (err, config) => {
-    if (err) return res.status(500).json({ message: err.message });
-    
-    const newStatus = config ? !config.is_running : true;
-    
-    db.run(
-      'UPDATE agent_config SET is_running = ?, updated_at = ? WHERE id = 1',
-      [newStatus ? 1 : 0, new Date().toISOString()],
-      function(err) {
-        if (err) return res.status(500).json({ message: err.message });
-        
-        // Log the status change
-        db.run(
-          'INSERT INTO agent_thoughts (type, content, model_name) VALUES (?, ?, ?)',
-          ['system', `Agent ${newStatus ? 'started' : 'stopped'}`, 'system'],
-          function(err) {
-            if (err) console.error('Error logging agent status change:', err.message);
-            
-            res.json({
-              message: `Agent ${newStatus ? 'started' : 'stopped'} successfully`,
-              status: newStatus ? 'active' : 'idle'
-            });
-          }
-        );
+// Toggle agent status
+router.post('/toggle', (req, res) => {
+  const { is_running } = req.body;
+  
+  db.run(
+    'UPDATE agent_config SET is_running = ?, updated_at = ? WHERE id = 1',
+    [is_running ? 1 : 0, new Date().toISOString()],
+    function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
       }
-    );
-  });
+      
+      // Start or stop the agent service
+      if (is_running) {
+        agentBrainService.start();
+      } else {
+        agentBrainService.stop();
+      }
+      
+      res.json({ 
+        success: true, 
+        is_running: is_running 
+      });
+    }
+  );
 });
 
 // Configure agent
@@ -135,46 +90,97 @@ router.post('/configure', skipAuth, (req, res) => {
 });
 
 // Get agent thoughts
-router.get('/thoughts', skipAuth, (req, res) => {
-  const campaignId = req.query.campaignId;
-  const limit = parseInt(req.query.limit) || 20;
+router.get('/thoughts', (req, res) => {
+  const limit = req.query.limit || 20;
   
-  let sql = `
-    SELECT * FROM agent_thoughts
-  `;
-  
-  const params = [];
-  
-  if (campaignId) {
-    sql += ' WHERE campaign_id = ?';
-    params.push(campaignId);
-  }
-  
-  sql += ' ORDER BY timestamp DESC LIMIT ?';
-  params.push(limit);
-  
-  db.all(sql, params, (err, thoughts) => {
-    if (err) return res.status(500).json({ message: err.message });
-    
-    res.json(thoughts);
-  });
+  db.all(
+    'SELECT * FROM agent_thoughts ORDER BY timestamp DESC LIMIT ?',
+    [limit],
+    (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      res.json(rows || []);
+    }
+  );
 });
 
 // Force agent to run now
-router.post('/run-now', skipAuth, (req, res) => {
-  // Update last run time to force the agent to run on next check
-  db.run(
-    'UPDATE agent_config SET last_run = ? WHERE id = 1',
-    [new Date(0).toISOString()],
-    function(err) {
+router.post('/run-now', skipAuth, async (req, res) => {
+  try {
+    console.log('Forcing agent to run immediately');
+    
+    // Make sure the agent is running
+    db.run('UPDATE agent_config SET is_running = 1 WHERE id = 1');
+    
+    // Force the agent to run immediately
+    const success = await agentBrainService.forceRun();
+    
+    res.json({
+      message: success ? 'Agent run completed successfully' : 'Agent run triggered but encountered an error',
+      success: success
+    });
+  } catch (error) {
+    console.error('Error forcing agent run:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get agent configuration
+router.get('/config', skipAuth, (req, res) => {
+  db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, row) => {
+    if (err) return res.status(500).json({ message: err.message });
+    if (!row) return res.status(404).json({ message: 'Agent configuration not found' });
+    
+    res.json(row);
+  });
+});
+
+// Update agent configuration
+router.post('/config', skipAuth, (req, res) => {
+  const { personality, model_name } = req.body;
+  
+  // Validate inputs
+  if (!personality && !model_name) {
+    return res.status(400).json({ message: 'No configuration changes provided' });
+  }
+  
+  // Build the update query dynamically based on provided fields
+  let updateFields = [];
+  let params = [];
+  
+  if (personality) {
+    updateFields.push('personality = ?');
+    params.push(personality);
+  }
+  
+  if (model_name) {
+    updateFields.push('model_name = ?');
+    params.push(model_name);
+  }
+  
+  // Add updated_at timestamp
+  updateFields.push('updated_at = ?');
+  params.push(new Date().toISOString());
+  
+  // Add the WHERE clause parameter
+  params.push(1); // id = 1
+  
+  const sql = `UPDATE agent_config SET ${updateFields.join(', ')} WHERE id = ?`;
+  
+  db.run(sql, params, function(err) {
+    if (err) return res.status(500).json({ message: err.message });
+    
+    // Get the updated configuration
+    db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, row) => {
       if (err) return res.status(500).json({ message: err.message });
       
       res.json({
-        message: 'Agent will run on next check cycle',
-        success: true
+        message: 'Agent configuration updated successfully',
+        config: row
       });
-    }
-  );
+    });
+  });
 });
 
 export default router; 

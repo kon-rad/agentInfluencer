@@ -4,8 +4,8 @@ import cors from 'cors';
 import morgan from 'morgan';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import agentBrainService from './services/agentBrainService.js';
 import db from './database.js';
+import { runMigrations } from './database/migrations.js';
 
 // Get current file path (ES Modules equivalent of __dirname)
 const __filename = fileURLToPath(import.meta.url);
@@ -23,92 +23,6 @@ app.use(morgan('dev')); // Logging
 
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Initialize database tables
-function initializeDatabase() {
-  db.serialize(() => {
-    // Create tweets table
-    db.run(`CREATE TABLE IF NOT EXISTS tweets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      campaign_id INTEGER,
-      content TEXT NOT NULL,
-      media_urls TEXT,
-      scheduled_for DATETIME,
-      published_at DATETIME,
-      likes INTEGER DEFAULT 0,
-      retweets INTEGER DEFAULT 0,
-      replies INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
-    )`);
-
-    // Create campaigns table
-    db.run(`CREATE TABLE IF NOT EXISTS campaigns (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      description TEXT,
-      status TEXT DEFAULT 'draft',
-      start_date DATETIME,
-      end_date DATETIME,
-      auto_generated BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Create agent logs table
-    db.run(`CREATE TABLE IF NOT EXISTS agent_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      campaign_id INTEGER,
-      action_type TEXT NOT NULL,
-      thought_process TEXT,
-      result TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
-    )`);
-
-    // Create agent thoughts table
-    db.run(`CREATE TABLE IF NOT EXISTS agent_thoughts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      content TEXT NOT NULL,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      model_name TEXT,
-      campaign_id INTEGER,
-      FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
-    )`);
-
-    // Create agent configuration table
-    db.run(`CREATE TABLE IF NOT EXISTS agent_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      is_running BOOLEAN DEFAULT 0,
-      personality TEXT,
-      frequency INTEGER DEFAULT 3600000,
-      last_run DATETIME,
-      model_name TEXT DEFAULT 'meta-llama/Meta-Llama-3-8B-Instruct',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Insert default agent configuration if not exists
-    db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, row) => {
-      if (err) {
-        console.error('Error checking agent config:', err.message);
-        return;
-      }
-      
-      if (!row) {
-        db.run(`INSERT INTO agent_config (
-          is_running, personality, frequency, model_name
-        ) VALUES (?, ?, ?, ?)`, 
-        [
-          0, 
-          'You are a helpful DevRel agent for Base L2 network. Your goal is to create engaging content about Web3 developments and post bounties for content creators.',
-          3600000, // 1 hour in milliseconds
-          'meta-llama/Meta-Llama-3-8B-Instruct'
-        ]);
-      }
-    });
-  });
-}
 
 // Routes
 app.get('/', (req, res) => {
@@ -141,9 +55,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// After database initialization
+runMigrations().then(() => {
+  // Start the server
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}).catch(err => {
+  console.error('Error running migrations:', err);
+  process.exit(1);
 });
 
 // Export the database connection for use in other files
