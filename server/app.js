@@ -1,20 +1,11 @@
-import express from 'express';
-import agentRoutes from './routes/agent.js';
-
+const express = require('express');
 const app = express();
+const agentRoutes = require('./routes/agent');
+const analyticsRoutes = require('./routes/analytics');
 
-// Add CORS middleware
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  next();
-});
+// ... existing middleware setup ...
 
-// Parse JSON bodies
-app.use(express.json());
+app.use('/api/agent', agentRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
-// Mount routes - change the mount path to include /agents
-app.use('/api/agents', agentRoutes);
-
-export default app; 
+// ... rest of the file ... 

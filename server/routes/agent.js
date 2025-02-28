@@ -10,40 +10,29 @@ const skipAuth = (req, res, next) => {
 };
 
 // Get agent status
-router.get('/status', (req, res) => {
-  db.get('SELECT is_running FROM agent_config WHERE id = 1', [], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(row || { is_running: false });
-  });
+router.get('/:agentId/status', async (req, res) => {
+  try {
+    const status = await db.get('SELECT is_running FROM agents WHERE id = ?', [req.params.agentId]);
+    res.json({ is_running: status ? status.is_running : false });
+  } catch (error) {
+    console.error('Error getting agent status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Toggle agent status
-router.post('/toggle', (req, res) => {
-  const { is_running } = req.body;
-  
-  db.run(
-    'UPDATE agent_config SET is_running = ?, updated_at = ? WHERE id = 1',
-    [is_running ? 1 : 0, new Date().toISOString()],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      
-      // Start or stop the agent service
-      if (is_running) {
-        agentBrainService.start();
-      } else {
-        agentBrainService.stop();
-      }
-      
-      res.json({ 
-        success: true, 
-        is_running: is_running 
-      });
-    }
-  );
+router.post('/:agentId/toggle', async (req, res) => {
+  try {
+    const { is_running } = req.body;
+    await db.run(
+      'UPDATE agents SET is_running = ? WHERE id = ?',
+      [is_running, req.params.agentId]
+    );
+    res.json({ success: true, is_running });
+  } catch (error) {
+    console.error('Error toggling agent status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Configure agent
@@ -90,19 +79,17 @@ router.post('/configure', skipAuth, (req, res) => {
 });
 
 // Get agent thoughts
-router.get('/thoughts', (req, res) => {
-  const limit = req.query.limit || 20;
-  
-  db.all(
-    'SELECT * FROM agent_thoughts ORDER BY timestamp DESC LIMIT ?',
-    [limit],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(rows || []);
-    }
-  );
+router.get('/:agentId/thoughts', async (req, res) => {
+  try {
+    const thoughts = await db.all(
+      'SELECT * FROM agent_thoughts WHERE agent_id = ? ORDER BY created_at DESC LIMIT 10',
+      [req.params.agentId]
+    );
+    res.json(thoughts);
+  } catch (error) {
+    console.error('Error getting agent thoughts:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Force agent to run now
@@ -127,23 +114,19 @@ router.post('/run-now', skipAuth, async (req, res) => {
 });
 
 // Get agent configuration
-router.get('/config', skipAuth, (req, res) => {
-  db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, row) => {
+router.get('/:agentId/config', skipAuth, (req, res) => {
+  db.get('SELECT * FROM agents WHERE id = ?', [req.params.agentId], (err, row) => {
     if (err) return res.status(500).json({ message: err.message });
-    if (!row) return res.status(404).json({ message: 'Agent configuration not found' });
+    if (!row) return res.status(404).json({ message: 'Agent not found' });
     
     res.json(row);
   });
 });
 
 // Update agent configuration
-router.post('/config', skipAuth, (req, res) => {
-  const { personality, model_name, frequency, last_run } = req.body;
-  
-  // Validate inputs
-  if (!personality && !model_name && !frequency && !last_run) {
-    return res.status(400).json({ message: 'No configuration changes provided' });
-  }
+router.post('/:agentId/config', skipAuth, (req, res) => {
+  const { personality, model_name, frequency } = req.body;
+  const agentId = req.params.agentId;
   
   // Build the update query dynamically based on provided fields
   let updateFields = [];
@@ -164,25 +147,20 @@ router.post('/config', skipAuth, (req, res) => {
     params.push(frequency);
   }
   
-  if (last_run) {
-    updateFields.push('last_run = ?');
-    params.push(last_run);
-  }
-  
   // Add updated_at timestamp
   updateFields.push('updated_at = ?');
   params.push(new Date().toISOString());
   
   // Add the WHERE clause parameter
-  params.push(1); // id = 1
+  params.push(agentId);
   
-  const sql = `UPDATE agent_config SET ${updateFields.join(', ')} WHERE id = ?`;
+  const sql = `UPDATE agents SET ${updateFields.join(', ')} WHERE id = ?`;
   
   db.run(sql, params, function(err) {
     if (err) return res.status(500).json({ message: err.message });
     
     // Get the updated configuration
-    db.get('SELECT * FROM agent_config WHERE id = 1', [], (err, row) => {
+    db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
       if (err) return res.status(500).json({ message: err.message });
       
       res.json({

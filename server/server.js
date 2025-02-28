@@ -43,7 +43,7 @@ import toolRoutes from './routes/tools.js';
 app.use('/api/tweets', tweetRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/campaigns', campaignRoutes);
-app.use('/api/agent', agentRoutes);
+app.use('/api/agents', agentRoutes);
 app.use('/api/news', newsRoutes);
 app.use('/api/tools', toolRoutes);
 

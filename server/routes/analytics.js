@@ -11,52 +11,38 @@ const skipAuth = (req, res, next) => {
 };
 
 // Get overview analytics
-router.get('/overview', skipAuth, (req, res) => {
-  // Get total tweets
-  db.get('SELECT COUNT(*) as total_tweets FROM tweets', [], (err, tweetData) => {
-    if (err) return res.status(500).json({ message: err.message });
-    
-    // Get total engagements
-    db.get(
-      `SELECT 
-        SUM(likes) as total_likes, 
-        SUM(retweets) as total_retweets,
-        SUM(replies) as total_replies
-       FROM tweets`,
-      [],
-      (err, engagementData) => {
-        if (err) return res.status(500).json({ message: err.message });
-        
-        // Get campaign stats
-        db.get(
-          `SELECT 
-            COUNT(*) as total_campaigns,
-            SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_campaigns
-           FROM campaigns`,
-          [],
-          (err, campaignData) => {
-            if (err) return res.status(500).json({ message: err.message });
-            
-            res.json({
-              tweets: tweetData.total_tweets,
-              engagements: {
-                likes: engagementData.total_likes || 0,
-                retweets: engagementData.total_retweets || 0,
-                replies: engagementData.total_replies || 0,
-                total: (engagementData.total_likes || 0) + 
-                       (engagementData.total_retweets || 0) + 
-                       (engagementData.total_replies || 0)
-              },
-              campaigns: {
-                total: campaignData.total_campaigns,
-                active: campaignData.active_campaigns
-              }
-            });
-          }
-        );
+router.get('/overview', async (req, res) => {
+  try {
+    // Get agent metrics
+    const agents = await db.get(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN is_running = 1 THEN 1 ELSE 0 END) as active
+      FROM agents
+    `);
+
+    // Get campaign metrics
+    const campaigns = await db.get(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
+      FROM campaigns
+    `);
+
+    res.json({
+      agents: {
+        total: agents.total || 0,
+        active: agents.active || 0
+      },
+      campaigns: {
+        total: campaigns.total || 0,
+        active: campaigns.active || 0
       }
-    );
-  });
+    });
+  } catch (error) {
+    console.error('Error getting analytics overview:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Get campaign analytics

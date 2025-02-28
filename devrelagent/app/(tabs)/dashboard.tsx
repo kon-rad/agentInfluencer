@@ -7,33 +7,21 @@ import { router } from 'expo-router';
 export default function DashboardScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const [overview, setOverview] = useState({
-    tweets: 0,
-    engagements: { total: 0, likes: 0, retweets: 0, replies: 0 },
-    campaigns: { active: 0, total: 0 }
+    agents: { total: 0, active: 0 },
+    campaigns: { total: 0, active: 0 }
   });
-  const [agentThoughts, setAgentThoughts] = useState([]);
-  const [agentStatus, setAgentStatus] = useState({ status: 'idle' });
 
   const fetchDashboardData = async () => {
     try {
       setError(null);
       setIsLoading(true);
       
-      // Fetch overview analytics
+      // Fetch overview data
       const overviewData = await apiClient.get('/analytics/overview');
       setOverview(overviewData);
       
-      // Fetch agent thoughts
-      const thoughtsData = await apiClient.get('/agent/thoughts');
-      setAgentThoughts(thoughtsData);
-      
-      // Fetch agent status
-      const statusData = await apiClient.get('/agent/status');
-      setAgentStatus({ 
-        status: statusData.is_running ? 'active' : 'inactive' 
-      });
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
       setError('Failed to load dashboard data. Please try again.');
@@ -54,33 +42,6 @@ export default function DashboardScreen() {
 
   const handleCreateAgent = () => {
     router.push('/agents/create');
-  };
-
-  const handleToggleAgent = async () => {
-    try {
-      setIsLoading(true);
-      
-      // The current status is opposite of what we want to set it to
-      const newStatus = agentStatus?.status !== 'active';
-      
-      // Send the correct payload format to match what the API expects
-      const response = await apiClient.post('/agent/toggle', {
-        is_running: newStatus
-      });
-      
-      // Update the agent status based on the response
-      setAgentStatus({
-        status: newStatus ? 'active' : 'inactive'
-      });
-      
-      // Refresh dashboard data
-      fetchDashboardData();
-    } catch (err) {
-      console.error('Error toggling agent status:', err);
-      setError('Failed to toggle agent status. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   if (isLoading && !isRefreshing) {
@@ -109,100 +70,25 @@ export default function DashboardScreen() {
         <>
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Dashboard</Text>
-            <View style={styles.headerActions}>
-              <TouchableOpacity 
-                style={styles.actionButton} 
-                onPress={handleCreateAgent}
-              >
-                <Ionicons name="add-circle-outline" size={24} color="#1DA1F2" />
-                <Text style={styles.actionButtonText}>New Agent</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[
-                  styles.actionButton, 
-                  { backgroundColor: agentStatus?.status === 'active' ? '#E0245E' : '#1DA1F2' }
-                ]} 
-                onPress={handleToggleAgent}
-              >
-                <Ionicons 
-                  name={agentStatus?.status === 'active' ? "pause-circle-outline" : "play-circle-outline"} 
-                  size={24} 
-                  color="white" 
-                />
-                <Text style={[styles.actionButtonText, { color: 'white' }]}>
-                  {agentStatus?.status === 'active' ? 'Pause Agent' : 'Start Agent'}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity 
+              style={styles.actionButton} 
+              onPress={handleCreateAgent}
+            >
+              <Ionicons name="add-circle-outline" size={24} color="#1DA1F2" />
+              <Text style={styles.actionButtonText}>New Agent</Text>
+            </TouchableOpacity>
           </View>
           
           <View style={styles.statsContainer}>
             <View style={styles.statCard}>
-              <Text style={styles.statValue}>{overview.tweets}</Text>
-              <Text style={styles.statLabel}>Tweets</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{overview.engagements.total}</Text>
-              <Text style={styles.statLabel}>Engagements</Text>
+              <Text style={styles.statValue}>{overview.agents.active}</Text>
+              <Text style={styles.statLabel}>Active Agents</Text>
+              <Text style={styles.statSubtext}>of {overview.agents.total} total</Text>
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statValue}>{overview.campaigns.active}</Text>
               <Text style={styles.statLabel}>Active Campaigns</Text>
-            </View>
-          </View>
-          
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Engagement Breakdown</Text>
-          </View>
-          
-          <View style={styles.engagementBreakdown}>
-            <View style={styles.engagementItem}>
-              <View 
-                style={[
-                  styles.engagementBar, 
-                  { 
-                    backgroundColor: '#1DA1F2', 
-                    width: `${(overview.engagements.likes / overview.engagements.total) * 100}%` 
-                  }
-                ]} 
-              />
-              <View style={styles.engagementInfo}>
-                <Text style={styles.engagementLabel}>Likes</Text>
-                <Text style={styles.engagementValue}>{overview.engagements.likes}</Text>
-              </View>
-            </View>
-            
-            <View style={styles.engagementItem}>
-              <View 
-                style={[
-                  styles.engagementBar, 
-                  { 
-                    backgroundColor: '#17BF63', 
-                    width: `${(overview.engagements.retweets / overview.engagements.total) * 100}%` 
-                  }
-                ]} 
-              />
-              <View style={styles.engagementInfo}>
-                <Text style={styles.engagementLabel}>Retweets</Text>
-                <Text style={styles.engagementValue}>{overview.engagements.retweets}</Text>
-              </View>
-            </View>
-
-            <View style={styles.engagementItem}>
-              <View 
-                style={[
-                  styles.engagementBar, 
-                  { 
-                    backgroundColor: '#794BC4', 
-                    width: `${(overview.engagements.replies / overview.engagements.total) * 100}%` 
-                  }
-                ]} 
-              />
-              <View style={styles.engagementInfo}>
-                <Text style={styles.engagementLabel}>Replies</Text>
-                <Text style={styles.engagementValue}>{overview.engagements.replies}</Text>
-              </View>
+              <Text style={styles.statSubtext}>of {overview.campaigns.total} total</Text>
             </View>
           </View>
         </>
@@ -251,9 +137,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginRight: 20,
   },
-  headerActions: {
-    flexDirection: 'row',
-  },
   actionButton: {
     padding: 15,
     borderRadius: 5,
@@ -282,34 +165,9 @@ const styles = StyleSheet.create({
   statLabel: {
     color: '#666',
   },
-  sectionHeader: {
-    padding: 20,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  engagementBreakdown: {
-    padding: 20,
-  },
-  engagementItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  engagementBar: {
-    height: 20,
-    borderRadius: 10,
-    marginRight: 10,
-  },
-  engagementInfo: {
-    flex: 1,
-  },
-  engagementLabel: {
+  statSubtext: {
     color: '#666',
-  },
-  engagementValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 12,
+    marginTop: 4,
   },
 });
