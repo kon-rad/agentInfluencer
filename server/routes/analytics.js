@@ -61,11 +61,10 @@ router.get('/overview', skipAuth, (req, res) => {
 
 // Get campaign analytics
 router.get('/campaigns/:id', skipAuth, (req, res) => {
-  const userId = req.user.id;
   const campaignId = req.params.id;
   
-  // First check if the campaign exists and belongs to the user
-  db.get('SELECT * FROM campaigns WHERE id = ? AND user_id = ?', [campaignId, userId], (err, campaign) => {
+  // First check if the campaign exists
+  db.get('SELECT * FROM campaigns WHERE id = ?', [campaignId], (err, campaign) => {
     if (err) return res.status(500).json({ message: err.message });
     if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
     

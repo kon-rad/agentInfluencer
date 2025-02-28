@@ -138,10 +138,10 @@ router.get('/config', skipAuth, (req, res) => {
 
 // Update agent configuration
 router.post('/config', skipAuth, (req, res) => {
-  const { personality, model_name } = req.body;
+  const { personality, model_name, frequency, last_run } = req.body;
   
   // Validate inputs
-  if (!personality && !model_name) {
+  if (!personality && !model_name && !frequency && !last_run) {
     return res.status(400).json({ message: 'No configuration changes provided' });
   }
   
@@ -157,6 +157,16 @@ router.post('/config', skipAuth, (req, res) => {
   if (model_name) {
     updateFields.push('model_name = ?');
     params.push(model_name);
+  }
+  
+  if (frequency) {
+    updateFields.push('frequency = ?');
+    params.push(frequency);
+  }
+  
+  if (last_run) {
+    updateFields.push('last_run = ?');
+    params.push(last_run);
   }
   
   // Add updated_at timestamp
@@ -181,6 +191,141 @@ router.post('/config', skipAuth, (req, res) => {
       });
     });
   });
+});
+
+// Get all agents
+router.get('/agents', (req, res) => {
+  db.all('SELECT * FROM agents', [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+// Create new agent
+router.post('/', async (req, res) => {
+  const {
+    name,
+    personality,
+    model_name,
+    frequency,
+    telegram_bot_token,
+    tools
+  } = req.body;
+
+  try {
+    // Insert the new agent into the database
+    const sql = `
+      INSERT INTO agents (
+        name,
+        personality,
+        model_name,
+        frequency,
+        telegram_bot_token,
+        tools,
+        is_running,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const now = new Date().toISOString();
+    
+    db.run(sql, [
+      name,
+      personality,
+      model_name,
+      frequency,
+      telegram_bot_token,
+      JSON.stringify(tools),
+      false, // is_running default false
+      now,   // created_at
+      now    // updated_at
+    ], function(err) {
+      if (err) {
+        console.error('Database error:', err);
+        return res.status(500).json({ error: 'Failed to create agent' });
+      }
+
+      // Get the created agent
+      db.get('SELECT * FROM agents WHERE id = ?', [this.lastID], (err, agent) => {
+        if (err) {
+          console.error('Error fetching created agent:', err);
+          return res.status(500).json({ error: 'Failed to fetch created agent' });
+        }
+        res.status(201).json(agent);
+      });
+    });
+  } catch (error) {
+    console.error('Error creating agent:', error);
+    res.status(500).json({ error: 'Failed to create agent' });
+  }
+});
+
+// Get specific agent
+router.get('/agent/:id', (req, res) => {
+  const agentId = req.params.id;
+  
+  db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, agent) => {
+    if (err) {
+      console.error('Error fetching agent:', err);
+      return res.status(500).json({ error: 'Failed to fetch agent' });
+    }
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    res.json(agent);
+  });
+});
+
+// Update agent
+router.put('/agents/:id', async (req, res) => {
+  try {
+    const [agent] = await db('agents')
+      .where({ id: req.params.id })
+      .update(req.body)
+      .returning('*');
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    res.json(agent);
+  } catch (error) {
+    console.error('Error updating agent:', error);
+    res.status(500).json({ error: 'Failed to update agent' });
+  }
+});
+
+// Delete agent
+router.delete('/agents/:id', async (req, res) => {
+  try {
+    const deleted = await db('agents').where({ id: req.params.id }).delete();
+    if (!deleted) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting agent:', error);
+    res.status(500).json({ error: 'Failed to delete agent' });
+  }
+});
+
+// Modify your existing routes to include agentId
+router.get('/agent/:id/thoughts', (req, res) => {
+  const agentId = req.params.id;
+  
+  db.all(
+    'SELECT * FROM agent_thoughts WHERE agent_id = ? ORDER BY timestamp DESC LIMIT 50',
+    [agentId],
+    (err, thoughts) => {
+      if (err) {
+        console.error('Error fetching agent thoughts:', err);
+        return res.status(500).json({ error: 'Failed to fetch agent thoughts' });
+      }
+      res.json(thoughts || []);
+    }
+  );
 });
 
 export default router; 

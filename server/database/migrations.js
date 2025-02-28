@@ -73,16 +73,15 @@ export const runMigrations = async () => {
                 FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
               )`);
 
-              // Create campaigns table
+              // Create campaigns table with all needed columns from the start
               db.run(`CREATE TABLE IF NOT EXISTS campaigns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 description TEXT,
                 status TEXT DEFAULT 'draft',
-                start_date DATETIME,
-                end_date DATETIME,
-                auto_generated BOOLEAN DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                reward TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
 
               // Create agent_logs table
@@ -111,67 +110,26 @@ export const runMigrations = async () => {
               db.run(`CREATE TABLE IF NOT EXISTS agent_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 is_running BOOLEAN DEFAULT 0,
-                personality TEXT,
+                personality TEXT DEFAULT 'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
                 frequency INTEGER DEFAULT 3600000,
                 last_run DATETIME,
-                model_name TEXT DEFAULT 'meta-llama/Meta-Llama-3-8B-Instruct',
+                model_name TEXT DEFAULT 'gpt-4-turbo-preview',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
-            });
-            resolve();
-          });
-        }
-      },
-      {
-        name: '002_add_reward_to_campaigns',
-        up: async () => {
-          return new Promise((resolve, reject) => {
-            db.run(`ALTER TABLE campaigns ADD COLUMN reward TEXT;`, (err) => {
-              if (err && !err.message.includes('duplicate column name')) {
-                reject(err);
-              } else {
-                resolve();
-              }
-            });
-          });
-        }
-      },
-      {
-        name: '003_add_updated_at_to_campaigns',
-        up: async () => {
-          return new Promise((resolve, reject) => {
-            db.serialize(() => {
-              // Drop existing campaigns table
-              db.run(`DROP TABLE IF EXISTS campaigns`);
-              
-              // Create fresh campaigns table with all needed columns
-              db.run(`
-                CREATE TABLE campaigns (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  title TEXT NOT NULL,
-                  description TEXT,
-                  status TEXT DEFAULT 'draft',
-                  reward TEXT,
-                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-              `, (err) => {
-                if (err) {
-                  reject(err);
-                } else {
-                  resolve();
-                }
-              });
-            });
-          });
-        }
-      },
-      {
-        name: '003_add_news_articles_and_agent_tools',
-        up: async () => {
-          return new Promise((resolve, reject) => {
-            db.serialize(() => {
+
+              // Create agent_tools table with all needed columns from the start
+              db.run(`CREATE TABLE IF NOT EXISTS agent_tools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                parameters TEXT,
+                description TEXT NOT NULL,
+                usage_format TEXT,
+                example TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+              )`);
+
               // Create news_articles table
               db.run(`CREATE TABLE IF NOT EXISTS news_articles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,86 +144,109 @@ export const runMigrations = async () => {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
 
-              // Create agent_tools table
-              db.run(`CREATE TABLE IF NOT EXISTS agent_tools (
+              // Create twitter_trends table
+              db.run(`CREATE TABLE IF NOT EXISTS twitter_trends (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                parameters TEXT,
-                description TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                content TEXT NOT NULL,
+                author TEXT,
+                created_at DATETIME,
+                stored_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
 
-              // Insert the news analysis tool into agent_tools
-              db.run(`INSERT INTO agent_tools (tool_name, parameters, description, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)`,
-                [
-                  'NewsAnalysisTool',
-                  '{}',
-                  'Fetches recent Web3 news articles from Cointelegraph. No parameters required.',
-                  new Date().toISOString(),
-                  new Date().toISOString()
-                ],
-                (err) => {
-                  if (err) {
-                    console.error('Error inserting news analysis tool:', err);
-                  }
-                }
-              );
-            });
-            resolve();
-          });
-        }
-      },
-      {
-        name: '004_add_agent_actions_and_update_tools',
-        up: async () => {
-          return new Promise((resolve, reject) => {
-            db.serialize(() => {
               // Create agent_actions table
               db.run(`CREATE TABLE IF NOT EXISTS agent_actions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 action_type TEXT NOT NULL,
                 tool_name TEXT,
                 parameters TEXT,
+                status TEXT DEFAULT 'pending',
                 result TEXT,
-                status TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                completed_at DATETIME
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
-
-              // Add usage_format column to agent_tools if it doesn't exist
-              db.get("PRAGMA table_info(agent_tools)", [], (err, rows) => {
-                if (err) {
-                  console.error('Error checking agent_tools table:', err);
-                  reject(err);
-                  return;
-                }
-                
-                // Check if usage_format column exists
-                const hasUsageFormat = rows.some(row => row.name === 'usage_format');
-                
-                if (!hasUsageFormat) {
-                  db.run(`ALTER TABLE agent_tools ADD COLUMN usage_format TEXT DEFAULT ''`, (err) => {
-                    if (err) {
-                      console.error('Error adding usage_format column:', err);
-                      reject(err);
-                      return;
-                    }
-                    
-                    // Update existing tools with usage format
-                    db.run(`UPDATE agent_tools SET 
-                      usage_format = 'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: Need to fetch the latest Web3 news'
-                      WHERE tool_name = 'NewsAnalysisTool'`);
-                  });
-                }
-              });
             });
             resolve();
           });
         }
+      },
+      {
+        name: '002_insert_default_tools',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              // Insert default tools
+              db.run(`INSERT INTO agent_tools (
+                tool_name, 
+                parameters, 
+                description, 
+                usage_format,
+                created_at, 
+                updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                'NewsAnalysisTool',
+                '{}',
+                'Fetches recent Web3 news articles from Cointelegraph. No parameters required.',
+                'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news',
+                new Date().toISOString(),
+                new Date().toISOString()
+              ]);
+
+              // Insert default agent configuration
+              db.run(`INSERT INTO agent_config (
+                is_running,
+                personality,
+                frequency,
+                model_name,
+                created_at,
+                updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                0,
+                'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
+                3600000,
+                'gpt-4-turbo-preview',
+                new Date().toISOString(),
+                new Date().toISOString()
+              ]);
+            });
+            resolve();
+          });
+        }
+      },
+      {
+        name: '003_agents_table',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              CREATE TABLE IF NOT EXISTS agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                personality TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                frequency INTEGER NOT NULL,
+                telegram_bot_token TEXT,
+                tools JSON,
+                is_running BOOLEAN DEFAULT 0,
+                last_run DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+              )
+            `, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`DROP TABLE IF EXISTS agents`, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        }
       }
-      // Add new migrations here
     ];
 
     // Run each migration if it hasn't been run yet

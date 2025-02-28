@@ -56,4 +56,18 @@ router.get('/count', skipAuth, (req, res) => {
   });
 });
 
+// Get single article by ID
+router.get('/:id', skipAuth, async (req, res) => {
+  try {
+    const article = await newsAnalysisService.getArticleById(req.params.id);
+    if (!article) {
+      return res.status(404).json({ message: 'Article not found' });
+    }
+    res.json(article);
+  } catch (error) {
+    console.error('Error fetching article:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 export default router; 

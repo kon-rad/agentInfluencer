@@ -7,6 +7,7 @@ import { dirname } from 'path';
 import db from './database.js';
 import { runMigrations } from './database/migrations.js';
 import toolRegistryService from './services/toolRegistryService.js';
+import agentBrainService from './services/agentBrainService.js';
 
 // Get current file path (ES Modules equivalent of __dirname)
 const __filename = fileURLToPath(import.meta.url);
@@ -46,13 +47,26 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/news', newsRoutes);
 app.use('/api/tools', toolRoutes);
 
-// Initialize agent brain service
-console.log('Initializing agent brain service...');
-// The service will self-initialize when imported
+// Initialize the application
+async function initializeApp() {
+  try {
+    console.log('Running migrations...');
+    await runMigrations();
+    
+    console.log('Initializing services...');
+    await toolRegistryService.initialize();
+    await agentBrainService.initialize();
+    
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to initialize application:', error);
+    process.exit(1);
+  }
+}
 
-// Initialize tool registry service
-console.log('Initializing tool registry service...');
-// The service will self-initialize when imported
+initializeApp();
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -62,17 +76,6 @@ app.use((err, req, res, next) => {
     message: 'Something went wrong!',
     error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
-});
-
-// After database initialization
-runMigrations().then(() => {
-  // Start the server
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}).catch(err => {
-  console.error('Error running migrations:', err);
-  process.exit(1);
 });
 
 // Export the database connection for use in other files

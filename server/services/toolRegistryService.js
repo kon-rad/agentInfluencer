@@ -1,18 +1,30 @@
 import db from '../database.js';
 import newsAnalysisService from './newsAnalysisService.js';
+import twitterTrendService from './twitterTrendService.js';
 
 class ToolRegistryService {
   constructor() {
     this.tools = new Map();
-    this.registerBuiltInTools();
   }
 
-  registerBuiltInTools() {
+  async initialize() {
+    console.log('Initializing tool registry service...');
+    await this.registerBuiltInTools();
+  }
+
+  async registerBuiltInTools() {
     // Register the NewsAnalysisTool
-    this.registerTool('NewsAnalysisTool', {
-      description: 'Fetches recent Web3 news articles from Cointelegraph',
+    await this.registerTool('NewsAnalysisTool', {
+      description: 'Fetches recent Web3 news articles from Cointelegraph. No parameters required.',
+      parameters: {},
+      usage_format: 'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news'
+    });
+
+    // Register the TwitterTrendTool
+    await this.registerTool('TwitterTrendTool', {
+      description: 'Fetches current Web3 trends from Twitter',
       execute: async (params = {}) => {
-        return await newsAnalysisService.fetchNewsArticles();
+        return await twitterTrendService.fetchTwitterTrends();
       }
     });
   }

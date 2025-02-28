@@ -4,11 +4,20 @@ import dotenv from 'dotenv';
 import Together from 'together-ai';
 import newsAnalysisService from './newsAnalysisService.js';
 import toolRegistryService from './toolRegistryService.js';
+import farcasterService from './farcasterService.js';
+import TelegramBot from 'node-telegram-bot-api';
 
 dotenv.config();
 
 // Together AI API key
 const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+
+// Add your Telegram bot token here
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID; // Channel ID or username
+
+// Initialize the Telegram bot
+const telegramBot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
 class AgentBrainService {
   constructor() {
@@ -16,10 +25,9 @@ class AgentBrainService {
     this.intervalId = null;
     this.checkInterval = 10000; // Check every 10 seconds if agent should run
     this.together = new Together(TOGETHER_API_KEY);
-    this.init();
   }
 
-  async init() {
+  async initialize() {
     try {
       // Check if agent should be running
       const config = await this.getAgentConfig();
@@ -133,8 +141,9 @@ class AgentBrainService {
           
           // Generate the prompt
           console.log('Generating prompt with context and personality...');
-          const prompt = this.generatePrompt(context, config.personality);
+          const prompt = await this.generatePrompt(context, config.personality);
           console.log('Prompt generated, length:', prompt.length);
+          console.log('Prompt generated:', prompt);
           
           // Log the input
           console.log('Logging agent input thought...');
@@ -250,14 +259,25 @@ class AgentBrainService {
     // Get recent agent actions
     const recentActions = await toolRegistryService.getRecentActions(7);
     console.log(`Retrieved ${recentActions.length} recent agent actions`);
+
+    // Fetch and summarize Twitter trends
+    const twitterTrends = await toolRegistryService.executeTool('TwitterTrendTool');
+    const mindshareContext = this.summarizeMindshare(twitterTrends);
+    console.log(`Mindshare context: ${mindshareContext}`);
     
     return {
       recentTweets,
       activeCampaigns,
       recentNews,
       recentActions,
+      mindshareContext,
       currentTime: new Date().toISOString()
     };
+  }
+
+  summarizeMindshare(trends) {
+    // Summarize the trends into a coherent mindshare context
+    return trends.map(trend => trend.content).join(' ');
   }
 
   async getRecentTweets() {
@@ -284,8 +304,32 @@ class AgentBrainService {
     });
   }
 
-  generatePrompt(context, personality) {
-    const { recentTweets, activeCampaigns, recentNews, recentActions, currentTime } = context;
+  async getLastActions(limit = 7) {
+    return new Promise((resolve, reject) => {
+      db.all('SELECT * FROM agent_thoughts ORDER BY timestamp DESC LIMIT ?', [limit], (err, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(rows || []);
+      });
+    });
+  }
+
+  async getLastOutputThoughts(limit = 6) {
+    return new Promise((resolve, reject) => {
+      db.all('SELECT * FROM agent_thoughts WHERE type = "output" ORDER BY timestamp DESC LIMIT ?', [limit], (err, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(rows || []);
+      });
+    });
+  }
+
+  async generatePrompt(context, personality) {
+    const { recentTweets, activeCampaigns, recentNews, recentActions, mindshareContext, currentTime } = context;
     
     // Format recent tweets
     const tweetSection = recentTweets.length > 0 
@@ -322,24 +366,52 @@ class AgentBrainService {
         ).join('\n\n')}`
       : 'No tools available.';
     
+    // Add precise definitions for createBounty and createTweet
+    const customToolsSection = `
+|- CreateBounty: Use this tool to create a new bounty for content creators. 
+  Usage: ACTION: CreateBounty
+  PARAMETERS: {"title": "Bounty Title", "description": "Detailed description of the bounty", "reward": "Reward details"}
+  REASON: Explain why this bounty is being created.
+
+|- CreateTweet: Use this tool to generate a tweet about recent developments.
+  Usage: ACTION: CreateTweet
+  PARAMETERS: {"content": "The content of the tweet"}
+  REASON: Explain the purpose of the tweet.
+    `;
+
+    // Add last 6 output thoughts to the prompt
+    const lastOutputThoughts = await this.getLastOutputThoughts();
+    const outputThoughtsSection = lastOutputThoughts.length > 0
+      ? `Recent outputs:\n${lastOutputThoughts.map(t => `- ${t.content}`).join('\n')}`
+      : 'No recent outputs.';
+
+    // Improved instructions for tool usage
+    const toolUsageInstructions = `
+If you need to use a tool, ensure you specify the tool name correctly. Use the following format:
+ACTION: ToolName
+PARAMETERS: {"param1": "value1", "param2": "value2"}
+REASON: Brief explanation of why you're using this tool
+
+Ensure that the tool name is one of the available tools listed above. Do not use "ACTION" as a tool name.
+`;
+
     return `${personality || 'You are a helpful DevRel agent.'}\n\n
 Current time: ${currentTime}\n\n
+Mindshare Context: ${mindshareContext}\n\n
 ${tweetSection}\n\n
 ${campaignSection}\n\n
 ${newsSection}\n\n
 ${actionsSection}\n\n
+${outputThoughtsSection}\n\n
 ${toolsSection}\n\n
+${customToolsSection}\n\n
+${toolUsageInstructions}\n\n
 Based on the above information, please perform one of the following tasks:
 1. Generate a tweet about recent developments in Base L2 network or Web3
 2. Create a bounty for content creators to promote Base L2
 3. Analyze recent engagement and suggest content strategy
 4. Use a tool to gather more information
 5. Send funds on chain for fulfilled bounties
-
-If you need to use a tool, use the following format:
-ACTION: ToolName
-PARAMETERS: {"param1": "value1", "param2": "value2"}
-REASON: Brief explanation of why you're using this tool
 
 Choose the most appropriate task and provide your response.`;
   }
@@ -367,6 +439,7 @@ Choose the most appropriate task and provide your response.`;
       
       console.log(`Calling Together AI with serverless model: ${model}`);
       console.log(`Prompt length: ${prompt.length} characters`);
+      console.log(`Prompt contents: ${prompt}`);
       console.log('Together SDK instance exists:', !!this.together);
       
       // Debug the Together SDK instance
@@ -381,8 +454,8 @@ Choose the most appropriate task and provide your response.`;
       const response = await this.together.chat.completions.create({
         model: model,
         messages: [
-          { role: "system", content: "You are a helpful DevRel agent for Base L2 network." },
-          { role: "user", content: prompt }
+          { role: "system", content: prompt },
+          { role: "user", content:  "Make a decision on what to do next." }
         ],
         max_tokens: 1000,
       });
@@ -470,14 +543,27 @@ Choose the most appropriate task and provide your response.`;
       // Insert into tweets table
       return new Promise((resolve, reject) => {
         db.run(
-          'INSERT INTO tweets (content, scheduled_for) VALUES (?, ?)',
-          [tweetContent, new Date(Date.now() + 3600000).toISOString()], // Schedule for 1 hour later
-          function(err) {
+          'INSERT INTO tweets (content, scheduled_for, created_at) VALUES (?, ?, ?)',
+          [
+            tweetContent, 
+            new Date(Date.now() + 3600000).toISOString(),
+            new Date().toISOString()
+          ],
+          async function(err) {
             if (err) {
               reject(err);
               return;
             }
             console.log('Tweet created:', tweetContent);
+            
+            // Post to Telegram channel
+            try {
+              await telegramBot.sendMessage(TELEGRAM_CHANNEL_ID, tweetContent);
+              console.log('Posted to Telegram channel:', TELEGRAM_CHANNEL_ID);
+            } catch (telegramError) {
+              console.error('Error posting to Telegram:', telegramError);
+            }
+            
             resolve();
           }
         );
@@ -566,7 +652,7 @@ Choose the most appropriate task and provide your response.`;
       
       // Generate the prompt
       console.log('Generating prompt for force run...');
-      const prompt = this.generatePrompt(context, config.personality);
+      const prompt = await this.generatePrompt(context, config.personality);
       console.log('Prompt generated, length:', prompt.length);
       console.log('Prompt generated:', prompt);
       

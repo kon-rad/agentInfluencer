@@ -1,6 +1,6 @@
 import db from '../database.js';
-import axios from 'axios';
 import dotenv from 'dotenv';
+import { ApifyClient } from 'apify-client';
 
 dotenv.config();
 
@@ -9,49 +9,97 @@ const APIFY_API_KEY = process.env.APIFY_API_KEY;
 
 class NewsAnalysisService {
   constructor() {
-    this.apifyUrl = 'https://api.apify.com/v2/acts/apify/website-content-crawler/run-sync-get-dataset-items';
+    this.client = new ApifyClient({
+      token: APIFY_API_KEY,
+    });
     this.newsSource = 'https://cointelegraph.com/tags/web3';
-    this.maxArticles = 3; // Default number of articles to fetch
+    this.maxArticles = 5; // Updated to fetch 5 articles
   }
 
   async fetchNewsArticles() {
-    console.log('Fetching news articles from Cointelegraph...');
+    console.log('Fetching news articles from Cointelegraph Web3 section...');
     
     try {
-      // Call Apify API to crawl the website
-      const response = await axios.post(
-        this.apifyUrl,
-        {
-          startUrls: [{ url: this.newsSource }],
-          maxCrawlPages: 10,
-          maxCrawlDepth: 1,
-          maxResults: this.maxArticles,
-          pageLoadTimeoutSecs: 60
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${APIFY_API_KEY}`
-          }
-        }
-      );
+      // Configure the Website Content Crawler with optimal settings for Cointelegraph
+      const input = {
+        "startUrls": [{ "url": this.newsSource }],
+        "maxCrawlPages": 10,
+        "maxResults": this.maxArticles,
+        "crawlerType": "cheerio", // Using Cheerio for better performance
+        "additionalMimeTypes": ["text/html"],
+        "linkSelector": "article a.post-card-inline__title-link", // Target article links
+        "keepUrlFragments": false,
+        "maxCrawlDepth": 1,
+        "maxPagesPerCrawl": 6, // Main page + 5 articles
+        "maxRequestRetries": 3,
+        "requestTimeoutSecs": 30,
+        "maxRequestsPerCrawl": 6,
+        "minConcurrency": 1,
+        "maxConcurrency": 5,
+        "removeElementsCssSelector": `
+          nav, footer, header, 
+          .post-actions, .post-sidebar,
+          .related-posts, .advertisement,
+          script, style, iframe,
+          .social-share-buttons
+        `,
+        "saveSnapshot": false,
+        "saveHtml": false,
+        "saveMarkdown": true,
+        "htmlTransformer": "readableText",
+        "includeUrlGlobs": ["https://cointelegraph.com/news/*"],
+        "excludeUrlGlobs": [
+          "*/authors/*",
+          "*/tags/*",
+          "*/explained/*",
+          "*/magazine/*"
+        ]
+      };
 
-      console.log(`Received ${response.data.length} articles from Apify`);
+      // Run the Actor and wait for it to finish
+      console.log('Starting Apify Website Content Crawler...');
+      const run = await this.client.actor("apify/website-content-crawler").call(input);
+      
+      // Fetch results from the dataset
+      console.log(`Run finished, fetching results from dataset: ${run.defaultDatasetId}`);
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems();
+      
+      console.log(`Received ${items.length} items from Apify`);
       
       // Process and store the articles
-      if (response.data && Array.isArray(response.data)) {
-        const articles = response.data.map(item => {
-          // Extract relevant information from the crawled data
-          return {
-            title: item.metadata?.title || 'Untitled Article',
-            url: item.url,
-            content: item.text || '',
-            source: 'Cointelegraph',
-            published_at: item.metadata?.datePublished || new Date().toISOString(),
-            fetched_at: new Date().toISOString(),
-            tags: 'web3,blockchain,crypto'
-          };
-        });
+      if (items && Array.isArray(items)) {
+        const articles = items
+          .filter(item => item.url && item.url.includes('/news/')) // Only process news articles
+          .map(item => {
+            // Extract and clean the article content
+            let content = item.markdown || item.text || '';
+            
+            // Clean up the content
+            content = content
+              .replace(/Share this article/gi, '')
+              .replace(/Follow us on social media/gi, '')
+              .replace(/Subscribe to our newsletter/gi, '')
+              .replace(/Related:\s*/g, '')
+              .trim();
+
+            return {
+              title: item.metadata?.title || item.title || 'Untitled Article',
+              url: item.url,
+              content: content,
+              source: 'Cointelegraph',
+              published_at: item.metadata?.datePublished || new Date().toISOString(),
+              fetched_at: new Date().toISOString(),
+              tags: 'web3,blockchain,crypto'
+            };
+          })
+          .filter(article => 
+            article.content && 
+            article.content.length > 100 && 
+            article.title !== 'Untitled Article'
+          )
+          .slice(0, this.maxArticles); // Ensure we only keep the top 5 articles
+
+        console.log(`Found ${articles.length} valid articles to store`);
 
         // Store articles in the database
         await this.storeArticles(articles);
@@ -137,6 +185,19 @@ class NewsAnalysisService {
     });
   }
 
+  async getNewsCount() {
+    return new Promise((resolve, reject) => {
+      db.get('SELECT COUNT(*) as count FROM news_articles', [], (err, row) => {
+        if (err) {
+          console.error('Error getting news count:', err);
+          reject(err);
+          return;
+        }
+        resolve(row?.count || 0);
+      });
+    });
+  }
+
   // Method to check if we have recent news, and fetch if not
   async ensureFreshNews() {
     // Get the most recent article
@@ -163,6 +224,23 @@ class NewsAnalysisService {
     } else {
       console.log('Recent news is available, skipping fetch');
     }
+  }
+
+  async getArticleById(id) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        'SELECT * FROM news_articles WHERE id = ?',
+        [id],
+        (err, row) => {
+          if (err) {
+            console.error('Error getting article:', err);
+            reject(err);
+            return;
+          }
+          resolve(row || null);
+        }
+      );
+    });
   }
 }
 
