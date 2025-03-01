@@ -149,22 +149,6 @@ class ToolRegistryService {
       );
     });
   }
-
-  async getRecentActions(limit = 7) {
-    return new Promise((resolve, reject) => {
-      db.all(
-        'SELECT * FROM agent_actions ORDER BY created_at DESC LIMIT ?',
-        [limit],
-        (err, rows) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve(rows || []);
-        }
-      );
-    });
-  }
 }
 
 // Create and export a singleton instance

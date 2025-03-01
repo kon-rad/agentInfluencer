@@ -516,4 +516,42 @@ router.get('/:agentId/news', async (req, res) => {
   }
 });
 
+// Add this new route to get agent actions
+router.get('/:agentId/actions', async (req, res) => {
+  try {
+    const agentId = parseInt(req.params.agentId);
+    console.log('agentId: ', agentId);
+    
+    
+    // First verify the agent exists
+    const agent = await db.get('SELECT id FROM agents WHERE id = ?', [agentId]);
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      });
+    }
+
+    const actions = await db.all(`
+      SELECT * FROM agent_actions 
+      WHERE agent_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 10
+    `, [agentId]);
+
+    res.json({
+      success: true,
+      data: actions || []
+    });
+
+  } catch (error) {
+    console.error('Error getting agent actions:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch agent actions',
+      error: error.message 
+    });
+  }
+});
+
 export default router; 

@@ -319,7 +319,7 @@ export const runMigrations = async () => {
         }
       },
       {
-        name: '004_create_agent_news_table',
+        name: '008_create_agent_news_table',
         up: async () => {
           return new Promise((resolve, reject) => {
             db.run(`
@@ -331,6 +331,30 @@ export const runMigrations = async () => {
                 source TEXT NOT NULL,
                 published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )
+            `, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        }
+      },
+      {
+        name: '009_create_agent_actions_table',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              CREATE TABLE IF NOT EXISTS agent_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                tool_name TEXT,
+                parameters TEXT,
+                status TEXT DEFAULT 'pending',
+                result TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
                 FOREIGN KEY (agent_id) REFERENCES agents (id)
               )
             `, (err) => {
