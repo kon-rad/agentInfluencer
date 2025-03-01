@@ -126,7 +126,7 @@ router.get('/:id', async (req, res) => {
       try {
         // Re-instantiate the wallet using the stored data
         const importedWallet = await Wallet.import({
-          id: agent.wallet_id,
+          walletId: agent.wallet_id,
           seed: agent.wallet_seed,
           networkId: Coinbase.networks.BaseSepolia
         });
@@ -155,6 +155,10 @@ router.get('/:id', async (req, res) => {
         const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
         walletBalance = balance.toString();
         console.log(`Wallet balance for agent ${agent.id}: ${walletBalance} ETH`);
+        
+        // Also fetch all balances to see if there are other tokens
+        const allBalances = await importedWallet.listBalances();
+        console.log(`All wallet balances for agent ${agent.id}:`, JSON.stringify(allBalances));
       } catch (walletError) {
         console.error('Error fetching wallet details:', walletError);
         // Continue without balance if there's an error
@@ -234,6 +238,25 @@ router.post('/', async (req, res) => {
       console.log(`Wallet ID: ${walletId}`);
       console.log(`Wallet seed: ${walletData.seed}`);
 
+      // Fund the wallet with ETH from the faucet
+      console.log(`Requesting ETH from faucet for agent ${name}...`);
+      try {
+        // Create a faucet request that returns a Faucet transaction
+        let faucetTransaction = await wallet.faucet();
+        
+        // Wait for the faucet transaction to land on-chain
+        await faucetTransaction.wait();
+        
+        console.log(`Faucet transaction completed: ${faucetTransaction}`);
+        console.log(`Faucet transaction details: ${JSON.stringify(faucetTransaction)}`);
+        
+        // Get the updated balance after faucet funding
+        const ethBalance = await wallet.getBalance(Coinbase.assets.Eth);
+        console.log(`Wallet funded with ${ethBalance} ETH for agent ${name}`);
+      } catch (faucetError) {
+        console.error(`Error funding wallet from faucet: ${faucetError.message}`);
+        // Continue with wallet creation even if faucet fails
+      }
       
       const defaultAddress = defaultAddressObj.id;
       console.log("defaultAddress ---ffff ", defaultAddress)
@@ -709,6 +732,83 @@ router.get('/:agentId/actions', async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Failed to fetch agent actions',
+      error: error.message 
+    });
+  }
+});
+
+// Add this new route after the other routes
+// Fund agent wallet from faucet
+router.post('/:id/fund', async (req, res) => {
+  try {
+    const agent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [req.params.id], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
+    
+    if (!agent) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Agent not found' 
+      });
+    }
+    
+    if (!agent.wallet_seed || !agent.wallet_id) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Agent does not have a wallet configured' 
+      });
+    }
+    
+    // Re-instantiate the wallet using the stored data
+    const importedWallet = await Wallet.import({
+      walletId: agent.wallet_id,
+      seed: agent.wallet_seed,
+      networkId: Coinbase.networks.BaseSepolia
+    });
+    
+    console.log(`Wallet imported for agent ${agent.id} with ID: ${importedWallet.getId()}`);
+    
+    // Get initial balance for comparison
+    const initialBalance = await importedWallet.getBalance(Coinbase.assets.Eth);
+    console.log(`Initial wallet balance for agent ${agent.id}: ${initialBalance} ETH`);
+    
+    // Request ETH from the faucet
+    console.log(`Requesting ETH from faucet for agent ${agent.id}...`);
+    
+    // Create a faucet request that returns a Faucet transaction
+    let faucetTransaction = await importedWallet.faucet();
+    
+    // Wait for the faucet transaction to land on-chain
+    await faucetTransaction.wait();
+    
+    console.log(`Faucet transaction completed: ${faucetTransaction}`);
+    
+    // Get the updated balance after faucet funding
+    const newBalance = await importedWallet.getBalance(Coinbase.assets.Eth);
+    console.log(`Wallet funded with ${newBalance} ETH for agent ${agent.id}`);
+    
+    res.json({
+      success: true,
+      message: 'Agent wallet funded successfully',
+      data: {
+        agent_id: agent.id,
+        wallet_address: agent.wallet_address,
+        previous_balance: initialBalance.toString(),
+        new_balance: newBalance.toString(),
+        transaction: faucetTransaction
+      }
+    });
+  } catch (error) {
+    console.error('Error funding agent wallet:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fund agent wallet',
       error: error.message 
     });
   }
