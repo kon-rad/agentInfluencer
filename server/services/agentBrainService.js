@@ -134,7 +134,8 @@ class AgentBrainService {
           resolve({
             ...row,
             is_running: Boolean(row.is_running),
-            tools: row.tools ? JSON.parse(row.tools) : []
+            tools: row.tools ? JSON.parse(row.tools) : [],
+            next_wake_time: row.next_wake_time || null
           });
         } else {
           resolve(null);
@@ -146,17 +147,8 @@ class AgentBrainService {
   async getContext(agentId) {
     console.log('Gathering context for agent...');
     
-    // Get recent tweets, campaigns, and other relevant data
-    const recentTweets = await this.getRecentTweets();
-    console.log(`Retrieved ${recentTweets.length} recent tweets`);
-    
     const activeCampaigns = await this.getActiveCampaigns();
     console.log(`Retrieved ${activeCampaigns.length} active campaigns`);
-    
-    // Ensure we have fresh news and get recent articles
-    await newsAnalysisService.ensureFreshNews();
-    const recentNews = await newsAnalysisService.getRecentNews(3);
-    console.log(`Retrieved ${recentNews.length} recent news articles`);
     
     const recentActions = await this.getRecentActions(agentId, 7);
     console.log(`Retrieved ${recentActions.length} recent agent actions`);
@@ -164,9 +156,7 @@ class AgentBrainService {
     const mindshareContext = '';
     
     return {
-      recentTweets,
       activeCampaigns,
-      recentNews,
       recentActions,
       mindshareContext,
       currentTime: new Date().toISOString()
@@ -193,18 +183,40 @@ class AgentBrainService {
     // Build the tool descriptions
     const toolDescriptions = tools.map(tool => `${tool.tool_name}: ${tool.description}`).join('\n');
 
+    // Format the context with clear sections
+    const formattedContext = `
+    Active Campaigns:
+    ${context.activeCampaigns.length > 0 ? 
+      context.activeCampaigns.map(c => `- ${c.name}: ${c.description}`).join('\n') 
+      : 'No active campaigns'}
+
+    Recent Actions:
+    ${context.recentActions.length > 0 ? 
+      context.recentActions.map(a => `- ${a.action_type}: ${a.tool_name} (${a.status})`).join('\n') 
+      : 'No recent actions'}
+
+    Mindshare Context:
+    ${context.mindshareContext || 'No specific mindshare context available'}
+    `;
+
+    // Get the agent's name
+    const agent = await this.getAgentById(context.agentId);
+    const agentName = agent ? agent.name : 'Base DevRel Agent';
+
     // Construct the prompt
     let prompt = `
-    You are an AI DevRel agent for the Base L2 network. Your goal is to create engaging and valuable content for web3 developers, and to promote the DevRel protocol by incentivizing content creation through bounties.
+    You are: ${agentName}.
+    
+    Your personality:
+    ${personality}
     
     Here are the tools available to you:
     ${toolDescriptions}
     
-    Here is some context to help you:
-    ${JSON.stringify(context, null, 2)}
+    Here is your current context:
+    ${formattedContext}
     
-    Your personality:
-    ${personality}
+    Current time: ${context.currentTime}
     
     Compose your next action. Structure your response like this:
     
@@ -221,7 +233,6 @@ class AgentBrainService {
       const response = await this.together.chat.completions.create({
         model: modelName,
         messages: [{ role: "user", "content": prompt }],
-        max_tokens: 512,
         temperature: 0.7,
         top_p: 0.7,
         repetition_penalty: 1,
@@ -264,6 +275,12 @@ class AgentBrainService {
       const parameters = action.PARAMETERS || {};
       
       console.log(`Executing tool: ${toolName} with parameters:`, parameters);
+      
+      // Handle Sleep tool specially
+      if (toolName === 'SleepTool') {
+        await this.handleSleepTool(agentId, parameters);
+        return;
+      }
       
       // Record the action
       const actionId = await this.recordToolAction(agentId, toolName, parameters);
@@ -342,6 +359,57 @@ class AgentBrainService {
     });
   }
 
+  async handleSleepTool(agentId, parameters) {
+    try {
+      const sleepDuration = parseInt(parameters.milliseconds) || 60000; // Default to 1 minute if invalid
+      console.log(`Agent ${agentId} requested to sleep for ${sleepDuration}ms`);
+      
+      // Record the sleep action
+      const actionId = await this.recordToolAction(agentId, 'SleepTool', parameters);
+      
+      // Calculate wake time
+      const wakeTime = new Date(Date.now() + sleepDuration);
+      
+      // Update the agent's next_wake_time in the database
+      await this.updateAgentSleepTime(agentId, wakeTime);
+      
+      // Update the action as completed
+      await this.updateToolAction(actionId, 'completed', { 
+        message: `Agent will sleep until ${wakeTime.toISOString()}`,
+        wake_time: wakeTime.toISOString()
+      });
+      
+      console.log(`Agent ${agentId} sleep scheduled until ${wakeTime.toISOString()}`);
+      
+      // Log the sleep action as a thought
+      await this.logAgentThought(
+        agentId, 
+        'system', 
+        `Agent sleeping until ${wakeTime.toISOString()}`, 
+        'system'
+      );
+      
+    } catch (error) {
+      console.error('Error handling sleep tool:', error);
+    }
+  }
+
+  async updateAgentSleepTime(agentId, wakeTime) {
+    return new Promise((resolve, reject) => {
+      db.run(
+        'UPDATE agents SET next_wake_time = ?, updated_at = ? WHERE id = ?',
+        [wakeTime.toISOString(), new Date().toISOString(), agentId],
+        function(err) {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        }
+      );
+    });
+  }
+
   async runAgentLoop(agentId) {
     console.log(`Starting agent loop for agent ID: ${agentId}`);
     
@@ -349,6 +417,21 @@ class AgentBrainService {
     if (!agent || !agent.is_running) {
       console.log(`Agent ${agentId} is not running or not found`);
       return;
+    }
+
+    // Check if the agent is sleeping
+    if (agent.next_wake_time) {
+      const wakeTime = new Date(agent.next_wake_time);
+      const now = new Date();
+      
+      if (wakeTime > now) {
+        console.log(`Agent ${agentId} is sleeping until ${wakeTime.toISOString()}`);
+        return; // Skip this run as the agent is still sleeping
+      } else {
+        console.log(`Agent ${agentId} wake time has passed, continuing execution`);
+        // Clear the wake time as we're now running
+        await this.clearAgentSleepTime(agentId);
+      }
     }
 
     try {
@@ -402,15 +485,19 @@ class AgentBrainService {
     });
   }
 
-  async getRecentTweets() {
+  async clearAgentSleepTime(agentId) {
     return new Promise((resolve, reject) => {
-      db.all('SELECT * FROM tweets ORDER BY created_at DESC LIMIT 5', [], (err, rows) => {
-        if (err) {
-          reject(err);
-          return;
+      db.run(
+        'UPDATE agents SET next_wake_time = NULL, updated_at = ? WHERE id = ?',
+        [new Date().toISOString(), agentId],
+        function(err) {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
         }
-        resolve(rows || []);
-      });
+      );
     });
   }
 

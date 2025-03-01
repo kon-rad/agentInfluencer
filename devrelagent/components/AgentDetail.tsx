@@ -42,6 +42,10 @@ interface AgentDetailProps {
   agentId: number;
 }
 
+interface ThoughtState {
+  [key: number]: boolean; // Tracks expanded state for each thought
+}
+
 export default function AgentDetail({ agentId }: AgentDetailProps) {
   const router = useRouter();
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -50,6 +54,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [thoughtStates, setThoughtStates] = useState<ThoughtState>({});
 
   const fetchAgentDetails = async () => {
     try {
@@ -106,6 +111,19 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
       console.error('Error toggling agent status:', error);
       setError('Failed to toggle agent status');
     }
+  };
+
+  const toggleThought = (id: number) => {
+    setThoughtStates(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  const handleRefreshThoughts = async () => {
+    setRefreshing(true);
+    await fetchAgentThoughts();
+    setRefreshing(false);
   };
 
   useEffect(() => {
@@ -301,16 +319,36 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
       )}
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Recent Thoughts</Text>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Thoughts</Text>
+          <TouchableOpacity onPress={handleRefreshThoughts}>
+            <Ionicons name="refresh" size={20} color="#1DA1F2" />
+          </TouchableOpacity>
+        </View>
         {thoughts.map((thought) => (
           <View key={thought.id} style={styles.thoughtBubble}>
-            <View style={styles.thoughtHeader}>
+            <TouchableOpacity 
+              style={styles.thoughtHeader}
+              onPress={() => toggleThought(thought.id)}
+            >
               <Text style={styles.thoughtType}>{thought.type}</Text>
-              <Text style={styles.thoughtTimestamp}>
-                {new Date(thought.timestamp).toLocaleString()}
-              </Text>
-            </View>
-            <Text style={styles.thoughtContent}>{thought.content}</Text>
+              <View style={styles.thoughtHeaderRight}>
+                <Text style={styles.thoughtTimestamp}>
+                  {new Date(thought.timestamp).toLocaleString()}
+                </Text>
+                <Ionicons 
+                  name={thoughtStates[thought.id] ? 'chevron-up' : 'chevron-down'} 
+                  size={16} 
+                  color="#657786" 
+                />
+              </View>
+            </TouchableOpacity>
+            <Text 
+              style={styles.thoughtContent}
+              numberOfLines={thoughtStates[thought.id] ? undefined : 1}
+            >
+              {thought.content}
+            </Text>
           </View>
         ))}
       </View>
@@ -413,6 +451,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 8,
+  },
+  thoughtHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   thoughtType: {
     fontSize: 14,
@@ -530,5 +573,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#657786',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
   },
 }); 

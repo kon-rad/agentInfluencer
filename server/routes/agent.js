@@ -385,14 +385,49 @@ router.patch('/:id', async (req, res) => {
 // Delete agent
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await db.run('DELETE FROM agents WHERE id = ?', [req.params.id]);
+    const agentId = req.params.id;
+    
+    // First delete related records
+    await new Promise((resolve, reject) => {
+      db.run('DELETE FROM agent_thoughts WHERE agent_id = ?', [agentId], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      db.run('DELETE FROM agent_actions WHERE agent_id = ?', [agentId], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Then delete the agent
+    const result = await new Promise((resolve, reject) => {
+      db.run('DELETE FROM agents WHERE id = ?', [agentId], function(err) {
+        if (err) reject(err);
+        else resolve(this);
+      });
+    });
+
     if (result.changes === 0) {
-      return res.status(404).json({ error: 'Agent not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Agent not found' 
+      });
     }
-    res.status(204).send();
+
+    res.json({
+      success: true,
+      message: 'Agent and all related data deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting agent:', error);
-    res.status(500).json({ error: 'Failed to delete agent' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to delete agent',
+      error: error.message 
+    });
   }
 });
 

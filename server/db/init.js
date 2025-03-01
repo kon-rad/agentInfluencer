@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import logger from '../utils/logger.js';
+import defaultTools from '../data/defaultTools.js';
 
 async function initializeDatabase() {
   try {
@@ -25,8 +26,9 @@ async function initializeDatabase() {
         is_running INTEGER DEFAULT 0,
         created_at DATETIME,
         updated_at DATETIME,
-        wallet_id TEXT,  -- Add wallet_id field
-        wallet_seed TEXT   -- Add wallet_seed field
+        wallet_id TEXT,
+        wallet_seed TEXT,
+        wallet_address TEXT
       )
     `);
 
@@ -62,9 +64,12 @@ async function initializeDatabase() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         agent_id INTEGER,
         action_type TEXT,
-        description TEXT,
-        details TEXT,
+        tool_name TEXT,
+        parameters TEXT,
+        status TEXT DEFAULT 'pending',
+        result TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME,
         FOREIGN KEY (agent_id) REFERENCES agents(id)
       )
     `);
@@ -79,6 +84,52 @@ async function initializeDatabase() {
         source TEXT,
         published_at DATETIME,
         FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+
+    // Create agent_tools table with correct schema
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_tools (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id INTEGER,
+        tool_name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        parameters TEXT,
+        usage_format TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create campaigns table for bounties
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT DEFAULT 'active',
+        reward TEXT,
+        deadline TEXT,
+        tweet_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create tweets table
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS tweets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        campaign_id INTEGER,
+        content TEXT NOT NULL,
+        media_urls TEXT,
+        tweet_id TEXT,
+        published_at DATETIME,
+        likes INTEGER DEFAULT 0,
+        retweets INTEGER DEFAULT 0,
+        replies INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
       )
     `);
 
@@ -99,6 +150,25 @@ async function initializeDatabase() {
         )
       `);
       logger.info('Default agent configuration inserted.');
+    }
+
+    // Seed default tools if they don't exist
+    for (const tool of defaultTools) {
+      const existingTool = await db.get('SELECT id FROM agent_tools WHERE tool_name = ?', [tool.tool_name]);
+      
+      if (!existingTool) {
+        await db.run(`
+          INSERT INTO agent_tools (
+            tool_name, description, parameters, usage_format, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, DATETIME('now'), DATETIME('now'))
+        `, [
+          tool.tool_name,
+          tool.description,
+          tool.parameters,
+          tool.usage_format
+        ]);
+        logger.info(`Default tool inserted: ${tool.tool_name}`);
+      }
     }
 
     logger.info('Database initialized successfully.');
