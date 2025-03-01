@@ -6,6 +6,7 @@ import newsAnalysisService from './newsAnalysisService.js';
 import toolRegistryService from './toolRegistryService.js';
 import farcasterService from './farcasterService.js';
 import TelegramBot from 'node-telegram-bot-api';
+import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
 
 dotenv.config();
 
@@ -183,6 +184,38 @@ class AgentBrainService {
     // Build the tool descriptions
     const toolDescriptions = tools.map(tool => `${tool.tool_name}: ${tool.description}`).join('\n');
 
+    // Get wallet information
+    let walletInfo = 'Wallet: Not configured';
+    const agent = await this.getAgentById(context.agentId);
+    
+    if (agent && agent.wallet_seed && agent.wallet_id) {
+        try {
+            const importedWallet = await Wallet.import({
+                walletId: agent.wallet_id,
+                seed: agent.wallet_seed,
+                networkId: Coinbase.networks.BaseSepolia
+            });
+
+            const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
+            walletInfo = `Wallet Address: ${agent.wallet_address}\nWallet Balance: ${balance.toString()} ETH`;
+        } catch (error) {
+            console.error('Error fetching wallet details:', error);
+            walletInfo = 'Wallet: Error fetching details';
+        }
+    }
+
+    // Format the current time in human-readable format
+    const now = new Date();
+    const formattedTime = now.toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: true
+    });
+
     // Format the context with clear sections
     const formattedContext = `
     Active Campaigns:
@@ -195,12 +228,13 @@ class AgentBrainService {
       context.recentActions.map(a => `- ${a.action_type}: ${a.tool_name} (${a.status})`).join('\n') 
       : 'No recent actions'}
 
+    ${walletInfo}
+
     Mindshare Context:
     ${context.mindshareContext || 'No specific mindshare context available'}
     `;
 
     // Get the agent's name
-    const agent = await this.getAgentById(context.agentId);
     const agentName = agent ? agent.name : 'Base DevRel Agent';
 
     // Construct the prompt
@@ -216,7 +250,7 @@ class AgentBrainService {
     Here is your current context:
     ${formattedContext}
     
-    Current time: ${context.currentTime}
+    Current time: ${formattedTime}
     
     Compose your next action. Structure your response like this:
     
