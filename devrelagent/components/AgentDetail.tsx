@@ -22,7 +22,7 @@ interface Agent {
   model_name: string;
   personality: string;
   last_run?: string;
-  tools?: { id: number; tool_name: string; description: string }[] | string[];
+  tools?: { id: number; tool_name: string; description: string }[];
   wallet_address?: string;
   wallet_balance?: string;
   wallet_id?: string;
@@ -60,6 +60,8 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
     try {
       const response = await axios.get(`http://localhost:3000/api/agents/${agentId}`);
       if (response.data) {
+        // Set the agent data directly from the response
+        // The tools are already fetched by the server using agentToolService
         setAgent(response.data);
       }
     } catch (error) {
@@ -81,7 +83,16 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   };
 
   const fetchNews = async () => {
-    if (!agent?.tools?.some(tool => tool?.tool_name?.toLowerCase().includes('news'))) {
+    if (!agent?.tools || !Array.isArray(agent.tools)) {
+      return;
+    }
+
+    // Check if any tool has "news" in its name
+    const hasNewsTool = agent.tools.some(tool => 
+      tool.tool_name && tool.tool_name.toLowerCase().includes('news')
+    );
+    
+    if (!hasNewsTool) {
       return;
     }
 
@@ -129,8 +140,16 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchAgentDetails(), fetchAgentThoughts(), fetchNews()]);
-      setLoading(false);
+      try {
+        await fetchAgentDetails();
+        await fetchAgentThoughts();
+        setLoading(false);
+        // Fetch news after agent details are loaded
+        await fetchNews();
+      } catch (error) {
+        console.error('Error loading data:', error);
+        setLoading(false);
+      }
     };
     
     loadData();
@@ -138,8 +157,15 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchAgentDetails(), fetchAgentThoughts(), fetchNews()]);
-    setRefreshing(false);
+    try {
+      await fetchAgentDetails();
+      await fetchAgentThoughts();
+      await fetchNews();
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   if (loading && !refreshing) {
@@ -251,23 +277,11 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Agent Tools</Text>
         {Array.isArray(agent.tools) && agent.tools.length > 0 ? (
-          agent.tools.map((tool, index) => {
-            if (typeof tool === 'string') {
-              return (
-                <View key={index} style={styles.toolItem}>
-                  <Text style={styles.toolName}>{tool}</Text>
-                </View>
-              );
-            } else if (typeof tool === 'object' && tool !== null) {
-              return (
-                <View key={tool.id || index} style={styles.toolItem}>
-                  <Text style={styles.toolName}>{tool.tool_name}</Text>
-                  {tool.description && <Text style={styles.toolDescription}>{tool.description}</Text>}
-                </View>
-              );
-            }
-            return null;
-          })
+          agent.tools.map((tool) => (
+            <View key={tool.id} style={styles.toolItem}>
+              <Text style={styles.toolName}>{tool.tool_name}</Text>
+            </View>
+          ))
         ) : (
           <View style={styles.toolItem}>
             <Text style={styles.toolName}>No tools configured</Text>

@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import db from '../database.js';
 import agentBrainService from '../services/agentBrainService.js';
 import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
+import agentToolService from '../services/agentToolService.js';
 
 const router = express.Router();
 
@@ -117,6 +118,9 @@ router.get('/:id', async (req, res) => {
     }
     console.log("agent ---- ", agent);
     
+    // Get agent tools using agentToolService
+    const agentTools = await agentToolService.getAgentTools(req.params.id);
+    console.log(`Tools fetched for agent ${agent.id}:`, agentTools);
     
     // Get wallet balance and address if wallet_seed exists
     let walletBalance = '0';
@@ -172,7 +176,7 @@ router.get('/:id', async (req, res) => {
       ...agent,
       id: agent.id,
       is_running: Boolean(agent.is_running),
-      tools: agent.tools ? JSON.parse(agent.tools) : [],
+      tools: agentTools, // Use the tools from agentToolService instead of parsing from agent.tools
       description: agent.personality || 'No description available',
       image_url: agent.image_url || null,
       created_at: agent.created_at || new Date().toISOString(),
@@ -309,6 +313,11 @@ router.post('/', async (req, res) => {
 
       console.log('✅ Agent created successfully:', agent.id);
 
+      // After agent creation, set tools if provided
+      if (req.body.toolIds && Array.isArray(req.body.toolIds)) {
+        await agentToolService.setAgentTools(result.lastID, req.body.toolIds);
+      }
+
       res.status(201).json({
         success: true,
         message: 'Agent created successfully',
@@ -342,25 +351,37 @@ router.post('/', async (req, res) => {
 
 // Update agent
 router.patch('/:id', async (req, res) => {
+  console.log("patch line 351 ")
   try {
     const { id } = req.params;
     const updates = req.body;
     const fields = Object.keys(updates)
-      .filter(key => ['name', 'personality', 'model_name', 'frequency', 'telegram_bot_token', 'tools', 'is_running'].includes(key));
+      .filter(key => ['name', 'personality', 'model_name', 'frequency', 'telegram_bot_token', 'is_running'].includes(key));
     
-    if (fields.length === 0) {
+    if (fields.length === 0 && !updates.tools) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
-    const sql = `
-      UPDATE agents 
-      SET ${fields.map(f => `${f} = ?`).join(', ')}, updated_at = ?
-      WHERE id = ?
-    `;
+    // Only update the agent record if there are fields to update
+    if (fields.length > 0) {
+      const sql = `
+        UPDATE agents 
+        SET ${fields.map(f => `${f} = ?`).join(', ')}, updated_at = ?
+        WHERE id = ?
+      `;
+      
+      const values = [...fields.map(f => updates[f]), new Date().toISOString(), id];
+      
+      await db.run(sql, values);
+    }
     
-    const values = [...fields.map(f => f === 'tools' ? JSON.stringify(updates[f]) : updates[f]), new Date().toISOString(), id];
+    // If tools are provided in the update, use agentToolService to update them
+    if (updates.tools && Array.isArray(updates.tools)) {
+      console.log(`Updating tools for agent ${id}:`, updates.tools);
+      await agentToolService.setAgentTools(id, updates.tools);
+    }
     
-    await db.run(sql, values);
+    // Get the updated agent
     const agent = await new Promise((resolve, reject) => {
       db.get('SELECT * FROM agents WHERE id = ?', [id], (err, row) => {
         if (err) {
@@ -375,7 +396,19 @@ router.patch('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Agent not found' });
     }
     
-    res.json(agent);
+    // Get the updated tools
+    const agentTools = await agentToolService.getAgentTools(id);
+    
+    // Format the response
+    const formattedAgent = {
+      ...agent,
+      is_running: Boolean(agent.is_running),
+      tools: agentTools,
+      created_at: agent.created_at || new Date().toISOString(),
+      updated_at: agent.updated_at || new Date().toISOString()
+    };
+    
+    res.json(formattedAgent);
   } catch (error) {
     console.error('Error updating agent:', error);
     res.status(500).json({ error: 'Failed to update agent' });
@@ -630,64 +663,103 @@ router.get('/:agentId/config', skipAuth, (req, res) => {
 });
 
 // Update agent configuration
-router.post('/:agentId/config', skipAuth, (req, res) => {
-  const { personality, model_name, frequency } = req.body;
-  const agentId = req.params.agentId;
+router.post('/:id/config', async (req, res) => {
+  const agentId = req.params.id;
+  console.log('Updating agent configuration for agent ID:', agentId);
+  console.log('Request body:', req.body);
   
-  // Build the update query dynamically based on provided fields
-  let updateFields = [];
-  let params = [];
-  
-  if (personality) {
-    updateFields.push('personality = ?');
-    params.push(personality);
-  }
-  
-  if (model_name) {
-    updateFields.push('model_name = ?');
-    params.push(model_name);
-  }
-  
-  if (frequency) {
-    updateFields.push('frequency = ?');
-    params.push(frequency);
-  }
-  
-  // Add updated_at timestamp
-  updateFields.push('updated_at = ?');
-  params.push(new Date().toISOString());
-  
-  // Add the WHERE clause parameter
-  params.push(agentId);
-  
-  const sql = `UPDATE agents SET ${updateFields.join(', ')} WHERE id = ?`;
-  
-  db.run(sql, params, function(err) {
-    if (err) return res.status(500).json({ message: err.message });
-    
-    // Get the updated configuration
-    db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
-      if (err) return res.status(500).json({ message: err.message });
-      
-      res.json({
-        message: 'Agent configuration updated successfully',
-        config: row
+  try {
+    // Validate the agent exists
+    const agent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
       });
     });
-  });
+    
+    if (!agent) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Agent not found' 
+      });
+    }
+    
+    // Extract fields from request body
+    const { name, personality, model_name, frequency, tools, telegram_bot_token } = req.body;
+    
+    // Update agent record
+    await new Promise((resolve, reject) => {
+      db.run(
+        'UPDATE agents SET name = ?, personality = ?, model_name = ?, frequency = ?, telegram_bot_token = ?, updated_at = ? WHERE id = ?',
+        [
+          name || agent.name,
+          personality || agent.personality,
+          model_name || agent.model_name,
+          frequency || agent.frequency,
+          telegram_bot_token || agent.telegram_bot_token,
+          new Date().toISOString(),
+          agentId
+        ],
+        (err) => {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+    
+    // If tools array is provided, update the agent's tools
+    if (tools && Array.isArray(tools)) {
+      console.log('Updating tools for agent:', agentId, 'with tools:', tools);
+      await agentToolService.setAgentTools(agentId, tools);
+    }
+    
+    // Get the updated configuration
+    const updatedAgent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+    
+    // Get the updated tools
+    const updatedTools = await agentToolService.getAgentTools(agentId);
+    
+    res.json({
+      success: true,
+      message: 'Agent configuration updated successfully',
+      config: {
+        ...updatedAgent,
+        tools: updatedTools
+      }
+    });
+  } catch (error) {
+    console.error('Error updating agent configuration:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to update agent configuration',
+      error: error.message 
+    });
+  }
 });
 
 // Get agent news
 router.get('/:agentId/news', async (req, res) => {
   try {
-    const agent = await db.get('SELECT tools FROM agents WHERE id = ?', [req.params.agentId]);
+    // First check if the agent exists
+    const agent = await db.get('SELECT id FROM agents WHERE id = ?', [req.params.agentId]);
     
-    if (!agent || !agent.tools) {
-      return res.json([]);
+    if (!agent) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Agent not found' 
+      });
     }
-
-    const tools = JSON.parse(agent.tools);
-    if (!tools.some(tool => tool.tool_name.toLowerCase().includes('news'))) {
+    
+    // Get the agent's tools using agentToolService
+    const agentTools = await agentToolService.getAgentTools(req.params.agentId);
+    
+    // Check if the agent has a news tool
+    if (!agentTools.some(tool => tool.tool_name.toLowerCase().includes('news'))) {
       return res.json([]);
     }
 
@@ -845,6 +917,23 @@ router.post('/:id/fund', async (req, res) => {
       success: false,
       message: 'Failed to fund agent wallet',
       error: error.message 
+    });
+  }
+});
+
+// Add a new route to get agent tools
+router.get('/:id/tools', async (req, res) => {
+  try {
+    const tools = await agentToolService.getAgentTools(req.params.id);
+    res.json({
+      success: true,
+      data: tools
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get agent tools',
+      error: error.message
     });
   }
 });

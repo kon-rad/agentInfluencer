@@ -99,11 +99,24 @@ class ToolRegistryService {
           
           // Get the agent to retrieve Telegram credentials
           const agent = await this.getAgentById(agentId);
-          if (agent && agent.telegram_bot_token) {
-            // Post to Telegram if configured
+          if (agent && agent.telegram_bot_token && agent.telegram_channel_id) {
+            // Compose Telegram message
+            const telegramMessage = `🚨 *New Bounty Alert!* 🚨\n\n` +
+              `*Title:* ${title}\n` +
+              `*Description:* ${description}\n` +
+              `*Reward:* ${reward}\n` +
+              `*Deadline:* ${new Date(deadline).toLocaleDateString()}\n\n` +
+              `Check out the tweet for more details!`;
+            
+            // Post to Telegram
             await telegramService.sendMessage(
               agent.telegram_bot_token,
-              `🏆 NEW BOUNTY: ${title}\n\n${description}\n\nReward: ${reward}\nDeadline: ${new Date(deadline).toLocaleDateString()}\n\nCheck Twitter for more details!`
+              agent.telegram_channel_id,
+              telegramMessage,
+              {
+                parse_mode: 'Markdown',
+                disable_web_page_preview: true
+              }
             );
           }
           
@@ -111,7 +124,7 @@ class ToolRegistryService {
             success: true,
             campaign_id: campaignId,
             tweet_id: tweetResult.id,
-            message: "Bounty created and posted successfully"
+            message: "Bounty created and posted successfully to Twitter and Telegram"
           };
         } catch (error) {
           console.error("Error creating bounty:", error);
@@ -237,62 +250,12 @@ class ToolRegistryService {
     });
   }
 
-  async executeTool(toolName, parameters = {}) {
-    // Record the action start
-    const actionId = await this.recordToolAction(toolName, parameters);
-    
-    try {
-      // Get the tool from the registry
-      const tool = this.tools.get(toolName);
-      
-      if (!tool) {
-        throw new Error(`Tool not found: ${toolName}`);
-      }
-      
-      // Execute the tool
-      const result = await tool.execute(parameters);
-      
-      // Update the action record with success
-      await this.updateToolAction(actionId, 'completed', result);
-      
-      return result;
-    } catch (error) {
-      // Update the action record with failure
-      await this.updateToolAction(actionId, 'failed', error.message);
-      throw error;
+  async executeTool(toolName, parameters) {
+    const tool = this.tools.get(toolName);
+    if (!tool) {
+      throw new Error(`Tool ${toolName} not found`);
     }
-  }
-
-  async recordToolAction(toolName, parameters) {
-    return new Promise((resolve, reject) => {
-      db.run(
-        'INSERT INTO agent_actions (action_type, tool_name, parameters, status, created_at) VALUES (?, ?, ?, ?, ?)',
-        ['tool_execution', toolName, JSON.stringify(parameters), 'started', new Date().toISOString()],
-        function(err) {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve(this.lastID);
-        }
-      );
-    });
-  }
-
-  async updateToolAction(actionId, status, result) {
-    return new Promise((resolve, reject) => {
-      db.run(
-        'UPDATE agent_actions SET status = ?, result = ?, completed_at = ? WHERE id = ?',
-        [status, JSON.stringify(result), new Date().toISOString(), actionId],
-        function(err) {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        }
-      );
-    });
+    return await tool(parameters);
   }
 
   // Helper methods for the tools
@@ -369,4 +332,5 @@ class ToolRegistryService {
 
 // Create and export a singleton instance
 const toolRegistryService = new ToolRegistryService();
+
 export default toolRegistryService; 

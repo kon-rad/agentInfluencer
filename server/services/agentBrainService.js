@@ -7,6 +7,8 @@ import toolRegistryService from './toolRegistryService.js';
 import farcasterService from './farcasterService.js';
 import TelegramBot from 'node-telegram-bot-api';
 import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
+import agentToolService from './agentToolService.js';
+import agentTable from '../db/tables/AgentTable.js';
 
 dotenv.config();
 
@@ -24,7 +26,7 @@ class AgentBrainService {
   constructor() {
     this.runningAgents = new Map(); // Track running agent instances
     this.together = new Together(TOGETHER_API_KEY);
-    this.checkInterval = 60000; // 60 seconds
+    this.checkInterval = 30000; // 30 seconds
   }
 
   async initialize() {
@@ -85,7 +87,6 @@ class AgentBrainService {
 
     // Update agent status in database
     await this.updateAgentStatus(agentId, true);
-    await this.logAgentThought(agentId, 'system', 'Agent started', 'system');
 
     // Force immediate first run
     this.runAgentLoop(agentId);
@@ -102,47 +103,15 @@ class AgentBrainService {
   }
 
   async updateAgentStatus(agentId, isRunning) {
-    return new Promise((resolve, reject) => {
-      db.run(
-        'UPDATE agents SET is_running = ?, updated_at = ? WHERE id = ?',
-        [isRunning ? 1 : 0, new Date().toISOString(), agentId],
-        (err) => {
-          if (err) reject(err);
-          else resolve();
-        }
-      );
-    });
+    return agentTable.updateAgentStatus(agentId, isRunning);
   }
 
   async getAgentTools(agentId) {
-    return new Promise((resolve, reject) => {
-      db.all('SELECT * FROM agent_tools WHERE agent_id = ?', [agentId], (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
+    return agentToolService.getAgentTools(agentId);
   }
 
   async getAgentById(agentId) {
-    return new Promise((resolve, reject) => {
-      db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
-        if (err) {
-          console.error('Error getting agent:', err);
-          reject(err);
-          return;
-        }
-        if (row) {
-          resolve({
-            ...row,
-            is_running: Boolean(row.is_running),
-            tools: row.tools ? JSON.parse(row.tools) : [],
-            next_wake_time: row.next_wake_time || null
-          });
-        } else {
-          resolve(null);
-        }
-      });
-    });
+    return agentTable.getAgentById(agentId);
   }
 
   async getContext(agentId) {
@@ -180,28 +149,75 @@ class AgentBrainService {
     });
   }
 
-  async generatePrompt(context, personality, tools) {
-    // Build the tool descriptions
-    const toolDescriptions = tools.map(tool => `${tool.tool_name}: ${tool.description}`).join('\n');
+  async generatePrompt(context, personality, tools, agentId) {
+    // Build the tool descriptions with exact parameter specifications
+    const toolDescriptions = tools.map(tool => {
+        let description = `${tool.tool_name}: ${tool.description}\n`;
+        try {
+            const params = JSON.parse(tool.parameters);
+            description += 'Parameters:\n';
+            for (const [param, desc] of Object.entries(params)) {
+                description += `  - ${param}: ${desc}\n`;
+            }
+        } catch (e) {
+            description += 'Parameters: None\n';
+        }
+        return description;
+    }).join('\n');
 
     // Get wallet information
     let walletInfo = 'Wallet: Not configured';
-    const agent = await this.getAgentById(context.agentId);
+    const agent = await this.getAgentById(agentId);
+    console.log("agent: ", agent)
     
+    console.log('Agent wallet details:', {
+      hasWalletSeed: !!agent?.wallet_seed,
+      hasWalletId: !!agent?.wallet_id,
+      hasWalletAddress: !!agent?.wallet_address
+    });
+
     if (agent && agent.wallet_seed && agent.wallet_id) {
         try {
+            console.log('Importing wallet for agent:', agent.id);
             const importedWallet = await Wallet.import({
                 walletId: agent.wallet_id,
                 seed: agent.wallet_seed,
                 networkId: Coinbase.networks.BaseSepolia
             });
 
+            console.log('Wallet imported successfully:', importedWallet.getId());
+
             const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
+            console.log('Wallet balance retrieved:', balance.toString());
+            
+            // If wallet address is not stored, get it from the wallet
+            if (!agent.wallet_address) {
+                const addressObj = await importedWallet.getDefaultAddress();
+                agent.wallet_address = addressObj.addressId;
+                console.log('Retrieved default wallet address:', agent.wallet_address);
+                
+                // Update the agent record with the wallet address
+                await new Promise((resolve, reject) => {
+                    db.run('UPDATE agents SET wallet_address = ? WHERE id = ?', 
+                    [agent.wallet_address, agent.id], 
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    });
+                });
+            }
+
             walletInfo = `Wallet Address: ${agent.wallet_address}\nWallet Balance: ${balance.toString()} ETH`;
         } catch (error) {
             console.error('Error fetching wallet details:', error);
             walletInfo = 'Wallet: Error fetching details';
         }
+    } else {
+        console.log('Wallet not configured for agent:', {
+            id: agent?.id,
+            hasWalletSeed: !!agent?.wallet_seed,
+            hasWalletId: !!agent?.wallet_id
+        });
     }
 
     // Format the current time in human-readable format
@@ -237,26 +253,27 @@ class AgentBrainService {
     // Get the agent's name
     const agentName = agent ? agent.name : 'Base DevRel Agent';
 
-    // Construct the prompt
+    // Construct the prompt with enhanced tool descriptions
     let prompt = `
     You are: ${agentName}.
     
     Your personality:
     ${personality}
-    
-    Here are the tools available to you:
-    ${toolDescriptions}
-    
     Here is your current context:
     ${formattedContext}
     
     Current time: ${formattedTime}
     
+    Here are the tools available to you. You MUST use the exact tool names and parameter formats:
+    ${toolDescriptions}
+    
     Compose your next action. Structure your response like this:
     
-    ACTION: The name of the tool you want to use.
-    PARAMETERS: A JSON object containing the parameters for the tool.
+    ACTION: The exact name of the tool you want to use.
+    PARAMETERS: A JSON object containing the exact parameters for the tool.
     REASON: Explain why you are using this tool.
+
+    IMPORTANT: You can ONLY use the tools listed above. You MUST follow the exact format provided.
     `;
     
     return prompt;
@@ -320,7 +337,7 @@ class AgentBrainService {
       const actionId = await this.recordToolAction(agentId, toolName, parameters);
       
       try {
-        // Execute the tool
+        // Execute the tool through the tool registry
         const result = await toolRegistryService.executeTool(toolName, parameters);
         
         // Update the action with the result
@@ -338,16 +355,43 @@ class AgentBrainService {
 
   parseAction(response) {
     try {
+      // Clean the response string
+      const cleanedResponse = response
+        .replace(/[‘’]/g, "'") // Replace smart quotes
+        .replace(/[""]/g, '"') // Replace smart double quotes
+        .replace(/–/g, '-')   // Replace en dash with regular dash
+        .replace(/\n/g, '')    // Remove newlines
+        .trim();
+
       const actionRegex = /ACTION:\s*(.+)/;
       const parametersRegex = /PARAMETERS:\s*({[\s\S]*?})/m;
       const reasonRegex = /REASON:\s*(.+)/;
       
-      const actionMatch = response.match(actionRegex);
-      const parametersMatch = response.match(parametersRegex);
-      const reasonMatch = response.match(reasonRegex);
+      const actionMatch = cleanedResponse.match(actionRegex);
+      const parametersMatch = cleanedResponse.match(parametersRegex);
+      const reasonMatch = cleanedResponse.match(reasonRegex);
       
       const action = actionMatch ? actionMatch[1].trim() : null;
-      const parameters = parametersMatch ? JSON.parse(parametersMatch[1]) : {};
+      let parameters = parametersMatch ? JSON.parse(parametersMatch[1]) : {};
+      
+      // Validate and transform parameters for CreateBountyTool
+      if (action === 'CreateBountyTool') {
+        if (parameters.duration) {
+          // Convert duration to ISO deadline
+          const duration = parseInt(parameters.duration);
+          if (!isNaN(duration)) {
+            const deadline = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
+            parameters.deadline = deadline.toISOString();
+          }
+          delete parameters.duration;
+        }
+        
+        // Validate required fields
+        if (!parameters.title || !parameters.description || !parameters.reward) {
+          throw new Error('Missing required fields for CreateBountyTool');
+        }
+      }
+      
       const reason = reasonMatch ? reasonMatch[1].trim() : null;
       
       return {
@@ -429,25 +473,14 @@ class AgentBrainService {
   }
 
   async updateAgentSleepTime(agentId, wakeTime) {
-    return new Promise((resolve, reject) => {
-      db.run(
-        'UPDATE agents SET next_wake_time = ?, updated_at = ? WHERE id = ?',
-        [wakeTime.toISOString(), new Date().toISOString(), agentId],
-        function(err) {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        }
-      );
-    });
+    return agentTable.updateAgentSleepTime(agentId, wakeTime);
   }
 
   async runAgentLoop(agentId) {
     console.log(`Starting agent loop for agent ID: ${agentId}`);
     
     const agent = await this.getAgentById(agentId);
+    console.log("run agent loop agent: ", agent)
     if (!agent || !agent.is_running) {
       console.log(`Agent ${agentId} is not running or not found`);
       return;
@@ -478,7 +511,7 @@ class AgentBrainService {
       console.log(`Context gathered for agent ID: ${agentId}:`, context);
 
       console.log(`Generating prompt for agent ID: ${agentId}`);
-      const prompt = await this.generatePrompt(context, agent.personality, tools);
+      const prompt = await this.generatePrompt(context, agent.personality, tools, agentId);
       console.log(`Prompt generated for agent ID: ${agentId}:`, prompt);
 
       console.log(`Logging input thought for agent ID: ${agentId}`);
@@ -504,35 +537,11 @@ class AgentBrainService {
   }
 
   async updateLastRunTime(agentId) {
-    return new Promise((resolve, reject) => {
-      const now = new Date().toISOString();
-      db.run('UPDATE agents SET last_run = ?, updated_at = ? WHERE id = ?', 
-        [now, now, agentId], 
-        function(err) {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        }
-      );
-    });
+    return agentTable.updateLastRunTime(agentId);
   }
 
   async clearAgentSleepTime(agentId) {
-    return new Promise((resolve, reject) => {
-      db.run(
-        'UPDATE agents SET next_wake_time = NULL, updated_at = ? WHERE id = ?',
-        [new Date().toISOString(), agentId],
-        function(err) {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        }
-      );
-    });
+    return agentTable.clearAgentSleepTime(agentId);
   }
 
   async getActiveCampaigns() {

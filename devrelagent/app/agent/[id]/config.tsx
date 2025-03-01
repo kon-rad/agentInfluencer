@@ -22,6 +22,7 @@ export default function AgentConfigScreen() {
   const [frequency, setFrequency] = useState('3600000');
   const [availableTools, setAvailableTools] = useState<Tool[]>([]);
   const [selectedTools, setSelectedTools] = useState<number[]>([]);
+  const [telegramBotId, setTelegramBotId] = useState('');
   
   const availableModels = [
     { label: 'Meta Llama 3 8B Instruct Turbo', value: 'meta-llama/Meta-Llama-3-8B-Instruct-Turbo' },
@@ -45,7 +46,17 @@ export default function AgentConfigScreen() {
       setPersonality(config.personality || '');
       setModelName(config.model_name || availableModels[0].value);
       setFrequency(config.frequency?.toString() || '3600000');
-      setSelectedTools(config.tools ? JSON.parse(config.tools).map((t: Tool) => t.id) : []);
+      
+      // Get the agent's tools
+      const toolsResponse = await axios.get(`http://localhost:3000/api/agents/${id}/tools`);
+      if (toolsResponse.data && toolsResponse.data.success) {
+        const agentTools = toolsResponse.data.data;
+        setSelectedTools(agentTools.map((tool: Tool) => tool.id));
+      } else {
+        setSelectedTools([]);
+      }
+      
+      setTelegramBotId(config.telegram_bot_token || '');
     } catch (err) {
       console.error('Error fetching agent config:', err);
       setError('Failed to load configuration');
@@ -57,7 +68,19 @@ export default function AgentConfigScreen() {
   const fetchTools = async () => {
     try {
       const response = await axios.get('http://localhost:3000/api/tools');
-      setAvailableTools(response.data);
+      const tools = response.data;
+      
+      // Fetch the actual tool details for selected tools
+      const selectedToolDetails = await Promise.all(
+        selectedTools.map(toolId => 
+          axios.get(`http://localhost:3000/api/tools/${toolId}`)
+            .then(res => res.data)
+            .catch(() => null)
+        )
+      );
+
+      setAvailableTools(tools);
+      setSelectedTools(selectedToolDetails.filter(t => t).map(t => t.id));
     } catch (err) {
       console.error('Error fetching tools:', err);
       setError('Failed to load tools');
@@ -80,7 +103,8 @@ export default function AgentConfigScreen() {
         personality,
         model_name: modelName,
         frequency: parseInt(frequency),
-        tools: selectedTools
+        tools: selectedTools,
+        telegram_bot_token: telegramBotId
       });
       router.back();
     } catch (err) {
@@ -177,6 +201,14 @@ export default function AgentConfigScreen() {
           onChangeText={setFrequency}
           keyboardType="numeric"
           placeholder="Update frequency in milliseconds"
+        />
+
+        <Text style={styles.label}>Telegram Bot ID</Text>
+        <TextInput
+          style={styles.input}
+          value={telegramBotId}
+          onChangeText={setTelegramBotId}
+          placeholder="Enter Telegram Bot ID"
         />
 
         <Text style={styles.label}>Tools</Text>
