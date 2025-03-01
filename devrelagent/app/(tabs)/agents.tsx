@@ -30,21 +30,15 @@ export default function AgentScreen() {
       setError(null);
       const response = await apiClient.get('/agents');
       
-      console.log('response: ', response);
       if (!response || !response.data) {
         throw new Error('No data received from server');
       }
-      console.log('response: 2', response);
-      
-      
       const { data } = response;
       if (!response.success) {
         throw new Error(response.message || 'Failed to load agents');
       }
-      console.log('response: 3', response);
       
       setAgents(data);
-      console.log('response: 4', response);
       
     } catch (error) {
       console.error('Error fetching agents:', error);

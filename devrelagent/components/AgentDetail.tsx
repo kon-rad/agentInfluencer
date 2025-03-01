@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 
 interface AgentThought {
   id: number;
+  agent_id: number;
   type: string;
   content: string;
   timestamp: string;
@@ -19,7 +20,17 @@ interface Agent {
   image_url: string;
   is_running: boolean;
   model_name: string;
+  personality: string;
   last_run?: string;
+  tools?: { id: number; tool_name: string; description: string }[];
+}
+
+interface News {
+  id: number;
+  title: string;
+  content: string;
+  source: string;
+  published_at: string;
 }
 
 interface AgentDetailProps {
@@ -30,6 +41,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   const router = useRouter();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [thoughts, setThoughts] = useState<AgentThought[]>([]);
+  const [news, setNews] = useState<News[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +70,22 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
     }
   };
 
+  const fetchNews = async () => {
+    if (!agent?.tools?.some(tool => tool.tool_name.toLowerCase().includes('news'))) {
+      return;
+    }
+
+    try {
+      const response = await axios.get(`http://localhost:3000/api/agents/${agentId}/news`);
+      if (response.data && Array.isArray(response.data)) {
+        setNews(response.data);
+      }
+    } catch (error) {
+      console.error('Error fetching news:', error);
+      setError('Failed to load news');
+    }
+  };
+
   const toggleAgentStatus = async () => {
     if (!agent) return;
     
@@ -78,7 +106,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchAgentDetails(), fetchAgentThoughts()]);
+      await Promise.all([fetchAgentDetails(), fetchAgentThoughts(), fetchNews()]);
       setLoading(false);
     };
     
@@ -87,7 +115,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchAgentDetails(), fetchAgentThoughts()]);
+    await Promise.all([fetchAgentDetails(), fetchAgentThoughts(), fetchNews()]);
     setRefreshing(false);
   };
 
@@ -148,11 +176,45 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
           >
             <View style={styles.statusIndicator} />
             <Text style={styles.statusText}>
-              {agent.is_running ? 'Active' : 'Inactive'}
+              {agent.is_running ? 'Stop Agent' : 'Start Agent'}
             </Text>
           </TouchableOpacity>
         </View>
       </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>System Prompt</Text>
+        <View style={styles.promptContainer}>
+          <Text style={styles.promptText}>{agent.personality}</Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Agent Tools</Text>
+        {agent.tools?.map((tool) => (
+          <View key={tool.id} style={styles.toolItem}>
+            <Text style={styles.toolName}>{tool.tool_name}</Text>
+            <Text style={styles.toolDescription}>{tool.description}</Text>
+          </View>
+        ))}
+      </View>
+
+      {news.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Recent News</Text>
+          {news.map((item) => (
+            <View key={item.id} style={styles.newsItem}>
+              <Text style={styles.newsTitle}>{item.title}</Text>
+              <Text style={styles.newsSource}>
+                {item.source} • {new Date(item.published_at).toLocaleDateString()}
+              </Text>
+              <Text style={styles.newsContent} numberOfLines={3}>
+                {item.content}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Recent Thoughts</Text>
@@ -280,5 +342,53 @@ const styles = StyleSheet.create({
   thoughtContent: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  toolItem: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  toolName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  toolDescription: {
+    fontSize: 14,
+    color: '#657786',
+  },
+  promptContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  promptText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#1A1B1F',
+  },
+  newsItem: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  newsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    color: '#1A1B1F',
+  },
+  newsSource: {
+    fontSize: 12,
+    color: '#657786',
+    marginBottom: 8,
+  },
+  newsContent: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#14171A',
   },
 }); 

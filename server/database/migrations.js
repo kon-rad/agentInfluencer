@@ -58,6 +58,61 @@ export const runMigrations = async () => {
         up: async () => {
           return new Promise((resolve, reject) => {
             db.serialize(() => {
+              // Create agents table
+              db.run(`CREATE TABLE IF NOT EXISTS agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                image_url TEXT,
+                is_running BOOLEAN DEFAULT 0,
+                model_name TEXT DEFAULT 'gpt-4-turbo-preview',
+                personality TEXT,
+                frequency INTEGER DEFAULT 3600000,
+                telegram_bot_token TEXT,
+                tools TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_run DATETIME
+              )`);
+
+              // Create agent_thoughts table with agent_id
+              db.run(`CREATE TABLE IF NOT EXISTS agent_thoughts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                model_name TEXT,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )`);
+
+              // Create agent_actions table
+              db.run(`CREATE TABLE IF NOT EXISTS agent_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                tool_name TEXT,
+                parameters TEXT,
+                status TEXT,
+                result TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )`);
+
+              // Create agent_tools table
+              db.run(`CREATE TABLE IF NOT EXISTS agent_tools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                tool_name TEXT NOT NULL,
+                parameters TEXT,
+                description TEXT NOT NULL,
+                usage_format TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )`);
+
               // Create tweets table
               db.run(`CREATE TABLE IF NOT EXISTS tweets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,41 +150,6 @@ export const runMigrations = async () => {
                 FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
               )`);
 
-              // Create agent_thoughts table
-              db.run(`CREATE TABLE IF NOT EXISTS agent_thoughts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                model_name TEXT,
-                campaign_id INTEGER,
-                FOREIGN KEY (campaign_id) REFERENCES campaigns (id)
-              )`);
-
-              // Create agent_config table
-              db.run(`CREATE TABLE IF NOT EXISTS agent_config (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                is_running BOOLEAN DEFAULT 0,
-                personality TEXT DEFAULT 'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
-                frequency INTEGER DEFAULT 3600000,
-                last_run DATETIME,
-                model_name TEXT DEFAULT 'gpt-4-turbo-preview',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-              )`);
-
-              // Create agent_tools table with all needed columns from the start
-              db.run(`CREATE TABLE IF NOT EXISTS agent_tools (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                parameters TEXT,
-                description TEXT NOT NULL,
-                usage_format TEXT,
-                example TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-              )`);
-
               // Create news_articles table
               db.run(`CREATE TABLE IF NOT EXISTS news_articles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,81 +173,32 @@ export const runMigrations = async () => {
                 stored_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
 
-              // Create agent_actions table
-              db.run(`CREATE TABLE IF NOT EXISTS agent_actions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action_type TEXT NOT NULL,
-                tool_name TEXT,
-                parameters TEXT,
-                status TEXT DEFAULT 'pending',
-                result TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-              )`);
-
-              // Consolidate into a single agents table
-              db.run(`CREATE TABLE IF NOT EXISTS agents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                image_url TEXT,
-                personality TEXT DEFAULT 'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
-                model_name TEXT DEFAULT 'gpt-4-turbo-preview',
-                frequency INTEGER DEFAULT 3600000,
-                telegram_bot_token TEXT,
-                tools JSON,
-                is_running BOOLEAN DEFAULT 0,
-                last_run DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-              )`);
+              resolve();
             });
-            resolve();
           });
         }
       },
       {
-        name: '002_insert_default_tools',
+        name: '002_add_agent_id_to_thoughts',
         up: async () => {
           return new Promise((resolve, reject) => {
             db.serialize(() => {
-              // Insert default tools
-              db.run(`INSERT INTO agent_tools (
-                tool_name, 
-                parameters, 
-                description, 
-                usage_format,
-                created_at, 
-                updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?)`,
-              [
-                'NewsAnalysisTool',
-                '{}',
-                'Fetches recent Web3 news articles from Cointelegraph. No parameters required.',
-                'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news',
-                new Date().toISOString(),
-                new Date().toISOString()
-              ]);
+              // Drop existing agent_thoughts table if it exists
+              db.run(`DROP TABLE IF EXISTS agent_thoughts`);
 
-              // Insert default agent configuration
-              db.run(`INSERT INTO agent_config (
-                is_running,
-                personality,
-                frequency,
-                model_name,
-                created_at,
-                updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?)`,
-              [
-                0,
-                'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
-                3600000,
-                'gpt-4-turbo-preview',
-                new Date().toISOString(),
-                new Date().toISOString()
-              ]);
+              // Recreate agent_thoughts table with correct schema
+              db.run(`CREATE TABLE agent_thoughts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                model_name TEXT,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )`);
+
+              resolve();
             });
-            resolve();
           });
         }
       },
@@ -258,6 +229,111 @@ export const runMigrations = async () => {
         down: async () => {
           return new Promise((resolve, reject) => {
             db.run(`DROP TABLE IF EXISTS agents`, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        }
+      },
+      {
+        name: '004_add_new_column_to_agent_thoughts',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`ALTER TABLE agent_thoughts ADD COLUMN new_column_name TEXT`, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        },
+        down: async () => {
+          // SQLite does not support dropping columns directly, so this is a placeholder
+          // You would need to recreate the table without the column if you need to rollback
+        }
+      },
+      {
+        name: '007_add_agent_id_to_multiple_tables',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              // Add agent_id to agent_tools
+              db.run(`ALTER TABLE agent_tools ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to agent_tools:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              // Add agent_id to agent_config
+              db.run(`ALTER TABLE agent_config ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to agent_config:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              // Add agent_id to agent_logs
+              db.run(`ALTER TABLE agent_logs ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to agent_logs:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              // Add agent_id to campaigns
+              db.run(`ALTER TABLE campaigns ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to campaigns:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              // Add agent_id to news_articles
+              db.run(`ALTER TABLE news_articles ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to news_articles:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              // Add agent_id to twitter_trends
+              db.run(`ALTER TABLE twitter_trends ADD COLUMN agent_id INTEGER REFERENCES agents(id)`, (err) => {
+                if (err) {
+                  console.error('Error adding agent_id to twitter_trends:', err);
+                  reject(err);
+                  return;
+                }
+              });
+
+              resolve();
+            });
+          });
+        },
+        down: async () => {
+          // SQLite does not support dropping columns directly, so this is a placeholder
+          // You would need to recreate the table without the column if you need to rollback
+        }
+      },
+      {
+        name: '004_create_agent_news_table',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              CREATE TABLE IF NOT EXISTS agent_news (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source TEXT NOT NULL,
+                published_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )
+            `, (err) => {
               if (err) reject(err);
               else resolve();
             });

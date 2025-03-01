@@ -21,9 +21,7 @@ const telegramBot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
 class AgentBrainService {
   constructor() {
-    this.isRunning = false;
-    this.intervalId = null;
-    this.checkInterval = 10000; // Check every 10 seconds if agent should run
+    this.runningAgents = new Map(); // Track running agent instances
     this.together = new Together(TOGETHER_API_KEY);
   }
 
@@ -613,21 +611,18 @@ Choose the most appropriate task and provide your response.`;
     }
   }
 
-  async logAgentThought(type, content, modelName, campaignId = null) {
-    console.log(`Logging agent thought: [${type}] ${content.substring(0, 100)}...`);
-    
+  async logAgentThought(agentId, type, content, modelName) {
     return new Promise((resolve, reject) => {
       const timestamp = new Date().toISOString();
       db.run(
-        'INSERT INTO agent_thoughts (type, content, model_name, campaign_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-        [type, content, modelName, campaignId, timestamp],
+        'INSERT INTO agent_thoughts (agent_id, type, content, model_name, timestamp) VALUES (?, ?, ?, ?, ?)',
+        [agentId, type, content, modelName, timestamp],
         function(err) {
           if (err) {
             console.error('Error logging agent thought:', err);
             reject(err);
             return;
           }
-          console.log(`Agent thought logged with ID: ${this.lastID}`);
           resolve(this.lastID);
         }
       );
@@ -695,6 +690,131 @@ Choose the most appropriate task and provide your response.`;
       await this.logAgentThought('error', `Error in force run: ${error.message}`, 'system');
       return false;
     }
+  }
+
+  async startAgent(agentId) {
+    if (this.runningAgents.has(agentId)) {
+      console.log(`Agent ${agentId} already running`);
+      return;
+    }
+
+    const agent = await this.getAgentById(agentId);
+    if (!agent) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    console.log(`Starting agent ${agentId}`);
+    
+    // Create interval for this specific agent
+    const intervalId = setInterval(() => this.runAgentLoop(agentId), 60000);
+    this.runningAgents.set(agentId, intervalId);
+
+    // Update agent status in database
+    await this.updateAgentStatus(agentId, true);
+    await this.logAgentThought(agentId, 'system', 'Agent started', 'system');
+
+    // Force immediate first run
+    this.runAgentLoop(agentId);
+  }
+
+  async stopAgent(agentId) {
+    const intervalId = this.runningAgents.get(agentId);
+    if (intervalId) {
+      clearInterval(intervalId);
+      this.runningAgents.delete(agentId);
+      await this.updateAgentStatus(agentId, false);
+      await this.logAgentThought(agentId, 'system', 'Agent stopped', 'system');
+    }
+  }
+
+  async updateAgentStatus(agentId, isRunning) {
+    return new Promise((resolve, reject) => {
+      db.run(
+        'UPDATE agents SET is_running = ?, updated_at = ? WHERE id = ?',
+        [isRunning ? 1 : 0, new Date().toISOString(), agentId],
+        (err) => {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+  }
+
+  // Get agent-specific tools
+  async getAgentTools(agentId) {
+    return new Promise((resolve, reject) => {
+      db.all('SELECT * FROM agent_tools WHERE agent_id = ?', [agentId], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows || []);
+      });
+    });
+  }
+
+  // Modified runAgentLoop to be agent-specific
+  async runAgentLoop(agentId) {
+    console.log(`Starting agent loop for agent ID: ${agentId}`);
+    
+    const agent = await this.getAgentById(agentId);
+    if (!agent || !agent.is_running) {
+      console.log(`Agent ${agentId} is not running or not found`);
+      return;
+    }
+
+    try {
+      console.log(`Fetching tools for agent ID: ${agentId}`);
+      const tools = await this.getAgentTools(agentId);
+      console.log(`Tools fetched for agent ID: ${agentId}:`, tools);
+
+      console.log(`Gathering context for agent ID: ${agentId}`);
+      const context = await this.getContext(agentId);
+      console.log(`Context gathered for agent ID: ${agentId}:`, context);
+
+      console.log(`Generating prompt for agent ID: ${agentId}`);
+      const prompt = await this.generatePrompt(context, agent.personality, tools);
+      console.log(`Prompt generated for agent ID: ${agentId}:`, prompt);
+
+      console.log(`Logging input thought for agent ID: ${agentId}`);
+      await this.logAgentThought(agentId, 'input', prompt, agent.model_name);
+
+      console.log(`Calling Together AI for agent ID: ${agentId}`);
+      const response = await this.callTogetherAI(prompt, agent.model_name);
+      console.log(`Response received for agent ID: ${agentId}:`, response);
+
+      console.log(`Logging output thought for agent ID: ${agentId}`);
+      await this.logAgentThought(agentId, 'output', response, agent.model_name);
+
+      console.log(`Processing response for agent ID: ${agentId}`);
+      await this.processResponse(agentId, response);
+
+      console.log(`Updating last run time for agent ID: ${agentId}`);
+      await this.updateLastRunTime(agentId);
+
+    } catch (error) {
+      console.error(`Error in agent ${agentId} loop:`, error);
+      await this.logAgentThought(agentId, 'error', error.message, 'system');
+    }
+  }
+
+  // Add this method to get agent by ID
+  async getAgentById(agentId) {
+    return new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
+        if (err) {
+          console.error('Error getting agent:', err);
+          reject(err);
+          return;
+        }
+        if (row) {
+          resolve({
+            ...row,
+            is_running: Boolean(row.is_running),
+            tools: row.tools ? JSON.parse(row.tools) : []
+          });
+        } else {
+          resolve(null);
+        }
+      });
+    });
   }
 }
 

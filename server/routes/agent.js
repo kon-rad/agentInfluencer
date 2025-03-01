@@ -45,8 +45,6 @@ router.get('/', async (req, res, next) => {
       });
     });
 
-    console.log('hello fetching all agents -----', agents);
-
     // If no agents exist, return empty array instead of error
     if (!agents || !agents.length) {
       return res.json({ 
@@ -107,11 +105,17 @@ router.get('/:id', async (req, res) => {
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
-    res.json({
+    // Format the response to match the Agent interface
+    const formattedAgent = {
       ...agent,
       is_running: Boolean(agent.is_running),
-      tools: agent.tools ? JSON.parse(agent.tools) : []
-    });
+      tools: agent.tools ? JSON.parse(agent.tools) : [],
+      description: agent.personality || 'No description available',
+      image_url: agent.image_url || null,
+      created_at: agent.created_at || new Date().toISOString(),
+      updated_at: agent.updated_at || new Date().toISOString()
+    };
+    res.json(formattedAgent);
   } catch (error) {
     console.error('Error fetching agent:', error);
     res.status(500).json({ error: 'Failed to fetch agent' });
@@ -256,15 +260,63 @@ router.get('/:agentId/status', async (req, res, next) => {
 // Toggle agent status
 router.post('/:agentId/toggle', async (req, res) => {
   try {
+    const agentId = parseInt(req.params.agentId);
     const { is_running } = req.body;
-    await db.run(
-      'UPDATE agents SET is_running = ? WHERE id = ?',
-      [is_running, req.params.agentId]
-    );
-    res.json({ success: true, is_running });
+
+    // Get current agent state
+    const agent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [agentId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      });
+    }
+
+    // Update agent status in database
+    await new Promise((resolve, reject) => {
+      db.run(
+        'UPDATE agents SET is_running = ?, updated_at = ? WHERE id = ?',
+        [is_running ? 1 : 0, new Date().toISOString(), agentId],
+        (err) => {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+
+    // Start or stop the agent brain service
+    try {
+      if (is_running) {
+        await agentBrainService.startAgent(agentId);
+      } else {
+        await agentBrainService.stopAgent(agentId);
+      }
+    } catch (error) {
+      console.error('Error in agent brain service:', error);
+      // Continue with the response even if the brain service has an error
+    }
+
+    res.json({
+      success: true,
+      message: `Agent ${is_running ? 'started' : 'stopped'} successfully`,
+      data: {
+        id: agentId,
+        is_running: is_running
+      }
+    });
   } catch (error) {
-    console.error('Error toggling agent status:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error toggling agent:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to toggle agent status',
+      error: error.message
+    });
   }
 });
 
@@ -314,14 +366,33 @@ router.post('/configure', skipAuth, (req, res) => {
 // Get agent thoughts
 router.get('/:agentId/thoughts', async (req, res) => {
   try {
+    // First verify the agent exists
+    const agent = await db.get('SELECT id FROM agents WHERE id = ?', [req.params.agentId]);
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Agent not found'
+      });
+    }
+
     const thoughts = await db.all(
-      'SELECT * FROM agent_thoughts WHERE agent_id = ? ORDER BY created_at DESC LIMIT 10',
+      `SELECT id, agent_id, type, content, timestamp, model_name 
+       FROM agent_thoughts 
+       WHERE agent_id = ? 
+       ORDER BY timestamp DESC 
+       LIMIT 10`,
       [req.params.agentId]
     );
-    res.json(thoughts);
+
+    res.json(thoughts || []);
+
   } catch (error) {
     console.error('Error getting agent thoughts:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch agent thoughts',
+      error: error.message 
+    });
   }
 });
 
@@ -402,6 +473,47 @@ router.post('/:agentId/config', skipAuth, (req, res) => {
       });
     });
   });
+});
+
+// Get agent news
+router.get('/:agentId/news', async (req, res) => {
+  try {
+    const agent = await db.get('SELECT tools FROM agents WHERE id = ?', [req.params.agentId]);
+    
+    if (!agent || !agent.tools) {
+      return res.json([]);
+    }
+
+    const tools = JSON.parse(agent.tools);
+    if (!tools.some(tool => tool.tool_name.toLowerCase().includes('news'))) {
+      return res.json([]);
+    }
+
+    const news = await db.all(`
+      SELECT * FROM agent_news 
+      WHERE agent_id = ? 
+      ORDER BY published_at DESC 
+      LIMIT 10
+    `, [req.params.agentId]);
+
+    // Format the news items to match the News interface
+    const formattedNews = news.map(item => ({
+      id: item.id,
+      title: item.title,
+      content: item.content,
+      source: item.source,
+      published_at: item.published_at
+    }));
+
+    res.json(formattedNews || []);
+  } catch (error) {
+    console.error('Error fetching agent news:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch agent news',
+      error: error.message 
+    });
+  }
 });
 
 export default router; 
