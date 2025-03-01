@@ -242,6 +242,23 @@ class NewsAnalysisService {
       );
     });
   }
+
+  async fetchLatestNews() {
+    console.log('Fetching latest news...');
+    
+    // First ensure we have fresh news
+    await this.ensureFreshNews();
+    
+    // Then get the recent news
+    const articles = await this.getRecentNews(5);
+    
+    return {
+      success: true,
+      articles: articles,
+      count: articles.length,
+      message: `Retrieved ${articles.length} latest news articles`
+    };
+  }
 }
 
 // Create and export a singleton instance

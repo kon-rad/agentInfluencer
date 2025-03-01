@@ -3,6 +3,9 @@ import newsAnalysisService from './newsAnalysisService.js';
 import twitterTrendService from './twitterTrendService.js';
 import twitterService from './twitterService.js';
 import telegramService from './telegramService.js';
+import pkg from '@coinbase/coinbase-sdk';
+const { Wallet, TimeoutError } = pkg;
+import * as Coinbase from '@coinbase/coinbase-sdk';
 
 class ToolRegistryService {
   constructor() {
@@ -19,7 +22,10 @@ class ToolRegistryService {
     await this.registerTool('NewsAnalysisTool', {
       description: 'Fetches recent Web3 news articles from Cointelegraph. No parameters required.',
       parameters: {},
-      usage_format: 'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news'
+      usage_format: 'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news',
+      execute: async (params = {}) => {
+        return await newsAnalysisService.fetchLatestNews();
+      }
     });
 
     // Register the TwitterTrendTool
@@ -185,10 +191,177 @@ class ToolRegistryService {
         }
       }
     });
+
+    // Register the CryptoTransferTool
+    await this.registerTool('CryptoTransferTool', {
+      description: "Sends a small amount of ETH (0.0000001) to a specified address using Coinbase SDK",
+      parameters: {
+        recipient_address: "string - Optional recipient address (defaults to 0xa01dD443827F88Ba34FefFA8949144BaB122D736 if not provided)",
+        network_id: "string - Optional network ID (defaults to 'base-sepolia')"
+      },
+      execute: async (params, agentId) => {
+        try {
+          // Extract parameters with defaults
+          const recipientAddress = params.recipient_address || "0xa01dD443827F88Ba34FefFA8949144BaB122D736";
+          // Use 'base-sepolia' as the default network
+          const networkId = params.network_id || 'base-sepolia';
+          
+          console.log(`Initiating crypto transfer of 0.0000001 ETH to ${recipientAddress} on ${networkId}`);
+          
+          // Map the network ID to the corresponding Coinbase networks value
+          let coinbaseNetworkId;
+          switch(networkId) {
+            case 'base-sepolia':
+              coinbaseNetworkId = Coinbase.networks.BaseSepolia;
+              break;
+            case 'base-mainnet':
+              coinbaseNetworkId = Coinbase.networks.BaseMainnet;
+              break;
+            default:
+              coinbaseNetworkId = Coinbase.networks.BaseSepolia;
+          }
+          
+          // Create a wallet on the specified network
+          const wallet = await Wallet.create({ 
+            networkId: coinbaseNetworkId 
+          });
+          
+          // Log the wallet address for debugging
+          const walletAddress = await wallet.getAddress();
+          console.log(`Sending from wallet address: ${walletAddress}`);
+          
+          // Create the transfer
+          const transfer = await wallet.createTransfer({
+            amount: 0.0000001,
+            assetId: Coinbase.assets.Eth,
+            destination: recipientAddress
+          });
+          
+          console.log(`Transfer initiated with ID: ${transfer.id}`);
+          
+          // Wait for the transfer to settle
+          let transferCompleted = false;
+          try {
+            await transfer.wait();
+            transferCompleted = true;
+          } catch (err) {
+            if (err instanceof TimeoutError) {
+              console.log("Waiting for transfer timed out, but transfer might still complete");
+            } else {
+              console.error("Error while waiting for transfer to complete:", err);
+              throw new Error(`Transfer failed: ${err.message}`);
+            }
+          }
+          
+          // Check transfer status
+          const status = transfer.getStatus();
+          console.log(`Transfer status: ${status}`);
+          
+          // Log the transaction in the agent_actions table
+          await new Promise((resolve, reject) => {
+            db.run(
+              `INSERT INTO agent_actions (agent_id, action_type, tool_name, parameters, status, result, created_at, completed_at) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                agentId, 
+                'crypto_transfer', 
+                'CryptoTransferTool', 
+                JSON.stringify({
+                  recipient_address: recipientAddress,
+                  network_id: networkId,
+                  amount: 0.0000001,
+                  asset: 'ETH'
+                }),
+                status,
+                JSON.stringify({
+                  transfer_id: transfer.id,
+                  from_address: walletAddress,
+                  to_address: recipientAddress,
+                  network: networkId,
+                  completed: transferCompleted
+                }),
+                new Date().toISOString(),
+                new Date().toISOString()
+              ],
+              function(err) {
+                if (err) {
+                  console.error("Error logging crypto transfer action:", err);
+                  reject(err);
+                } else {
+                  resolve(this.lastID);
+                }
+              }
+            );
+          });
+          
+          return {
+            success: status === 'complete',
+            transfer_id: transfer.id,
+            status: status,
+            from_address: walletAddress,
+            to_address: recipientAddress,
+            amount: 0.0000001,
+            asset: "ETH",
+            network: networkId,
+            message: status === 'complete' ? 
+              "Transfer completed successfully" : 
+              "Transfer status: " + status
+          };
+        } catch (error) {
+          console.error("Error sending crypto transfer:", error);
+          
+          // Log the failed attempt
+          try {
+            await new Promise((resolve, reject) => {
+              db.run(
+                `INSERT INTO agent_actions (agent_id, action_type, tool_name, parameters, status, result, created_at, completed_at) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  agentId, 
+                  'crypto_transfer', 
+                  'CryptoTransferTool', 
+                  JSON.stringify({
+                    recipient_address: params.recipient_address || "0xa01dD443827F88Ba34FefFA8949144BaB122D736",
+                    network_id: params.network_id || 'base-sepolia',
+                    amount: 0.0000001,
+                    asset: 'ETH'
+                  }),
+                  'failed',
+                  JSON.stringify({
+                    error: error.message,
+                    stack: error.stack
+                  }),
+                  new Date().toISOString(),
+                  new Date().toISOString()
+                ],
+                function(err) {
+                  if (err) {
+                    console.error("Error logging failed crypto transfer action:", err);
+                    reject(err);
+                  } else {
+                    resolve(this.lastID);
+                  }
+                }
+              );
+            });
+          } catch (logError) {
+            console.error("Error logging failed transfer:", logError);
+          }
+          
+          return {
+            success: false,
+            error: error.message,
+            details: error.stack
+          };
+        }
+      }
+    });
   }
 
   registerTool(name, toolConfig) {
+    console.log(`Registering tool: ${name}`);
     this.tools.set(name, toolConfig);
+    console.log(`Tool ${name} registered. Current tools:`, Array.from(this.tools.keys()));
     
     // Update or insert the tool in the database
     return new Promise((resolve, reject) => {
@@ -239,23 +412,41 @@ class ToolRegistryService {
   }
 
   async getRegisteredTools() {
+    console.log('Getting registered tools from database and memory...');
+    console.log('Tools in memory:', Array.from(this.tools.keys()));
+    
     return new Promise((resolve, reject) => {
       db.all('SELECT * FROM agent_tools', [], (err, rows) => {
         if (err) {
           reject(err);
           return;
         }
-        resolve(rows || []);
+        
+        // Enhance the database tools with the in-memory tools data
+        const enhancedTools = (rows || []).map(dbTool => {
+          const memoryTool = this.tools.get(dbTool.tool_name);
+          return {
+            ...dbTool,
+            has_execute_method: !!memoryTool?.execute
+          };
+        });
+        
+        console.log(`Retrieved ${enhancedTools.length} tools from database`);
+        resolve(enhancedTools);
       });
     });
   }
 
-  async executeTool(toolName, parameters) {
+  async executeTool(toolName, parameters, agentId) {
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw new Error(`Tool ${toolName} not found`);
     }
-    return await tool(parameters);
+    if (typeof tool.execute === 'function') {
+      return await tool.execute(parameters, agentId);
+    } else {
+      throw new Error(`Tool ${toolName} does not have an execute method`);
+    }
   }
 
   // Helper methods for the tools

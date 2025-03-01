@@ -338,7 +338,8 @@ class AgentBrainService {
       
       try {
         // Execute the tool through the tool registry
-        const result = await toolRegistryService.executeTool(toolName, parameters);
+        console.log(`Calling toolRegistryService.executeTool with toolName: "${toolName}", agentId: ${agentId}`);
+        const result = await toolRegistryService.executeTool(toolName, parameters, agentId);
         
         // Update the action with the result
         await this.updateToolAction(actionId, 'completed', result);
@@ -357,22 +358,32 @@ class AgentBrainService {
     try {
       // Clean the response string
       const cleanedResponse = response
-        .replace(/[‘’]/g, "'") // Replace smart quotes
+        .replace(/['']/g, "'") // Replace smart quotes
         .replace(/[""]/g, '"') // Replace smart double quotes
         .replace(/–/g, '-')   // Replace en dash with regular dash
-        .replace(/\n/g, '')    // Remove newlines
         .trim();
 
-      const actionRegex = /ACTION:\s*(.+)/;
+      // First, try to extract using the standard format with newlines
+      const actionRegex = /ACTION:\s*([a-zA-Z0-9_]+)/;
       const parametersRegex = /PARAMETERS:\s*({[\s\S]*?})/m;
-      const reasonRegex = /REASON:\s*(.+)/;
+      const reasonRegex = /REASON:\s*([\s\S]*?)(?:$|ACTION:)/;
       
       const actionMatch = cleanedResponse.match(actionRegex);
       const parametersMatch = cleanedResponse.match(parametersRegex);
       const reasonMatch = cleanedResponse.match(reasonRegex);
       
-      const action = actionMatch ? actionMatch[1].trim() : null;
+      let action = actionMatch ? actionMatch[1].trim() : null;
       let parameters = parametersMatch ? JSON.parse(parametersMatch[1]) : {};
+      let reason = reasonMatch ? reasonMatch[1].trim() : null;
+      
+      // If no action found, try alternative format where tool name might be concatenated with PARAMETERS
+      if (!action) {
+        const alternativeActionRegex = /([a-zA-Z0-9_]+)PARAMETERS:/;
+        const altActionMatch = cleanedResponse.match(alternativeActionRegex);
+        if (altActionMatch) {
+          action = altActionMatch[1].trim();
+        }
+      }
       
       // Validate and transform parameters for CreateBountyTool
       if (action === 'CreateBountyTool') {
@@ -391,8 +402,6 @@ class AgentBrainService {
           throw new Error('Missing required fields for CreateBountyTool');
         }
       }
-      
-      const reason = reasonMatch ? reasonMatch[1].trim() : null;
       
       return {
         ACTION: action,

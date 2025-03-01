@@ -36,6 +36,15 @@ const defaultTools = [
       milliseconds: "number - The duration to sleep in milliseconds (e.g., 3600000 for 1 hour)"
     }),
     usage_format: "ACTION: SleepTool\nPARAMETERS: {\n  \"milliseconds\": 3600000\n}\nREASON: To wait for 1 hour before checking for new content again"
+  },
+  {
+    tool_name: "CryptoTransferTool",
+    description: "Sends a small amount of ETH (0.0000001) to a specified address using Coinbase SDK",
+    parameters: JSON.stringify({
+      recipient_address: "string - Optional recipient address (defaults to 0xa01dD443827F88Ba34FefFA8949144BaB122D736 if not provided)",
+      network_id: "string - Optional network ID (defaults to Base Mainnet)"
+    }),
+    usage_format: "ACTION: CryptoTransferTool\nPARAMETERS: {\n  \"recipient_address\": \"0xa01dD443827F88Ba34FefFA8949144BaB122D736\",\n  \"network_id\": \"base-mainnet\"\n}\nREASON: To send a small amount of ETH as a reward for completing a bounty"
   }
 ];
 
