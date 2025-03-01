@@ -4,8 +4,7 @@ import twitterTrendService from './twitterTrendService.js';
 import twitterService from './twitterService.js';
 import telegramService from './telegramService.js';
 import pkg from '@coinbase/coinbase-sdk';
-const { Wallet, TimeoutError } = pkg;
-import * as Coinbase from '@coinbase/coinbase-sdk';
+const { Wallet, TimeoutError, Coinbase } = pkg;
 
 class ToolRegistryService {
   constructor() {
@@ -208,6 +207,17 @@ class ToolRegistryService {
           
           console.log(`Initiating crypto transfer of 0.0000001 ETH to ${recipientAddress} on ${networkId}`);
           
+          // Get the agent to retrieve wallet information
+          const agent = await this.getAgentById(agentId);
+          if (!agent) {
+            throw new Error(`Agent ${agentId} not found`);
+          }
+          
+          if (!agent.wallet_seed || !agent.wallet_id) {
+            throw new Error(`Agent ${agentId} does not have a wallet configured`);
+          }
+          
+          console.log("coinbase", Coinbase, JSON.stringify(Coinbase))
           // Map the network ID to the corresponding Coinbase networks value
           let coinbaseNetworkId;
           switch(networkId) {
@@ -221,17 +231,35 @@ class ToolRegistryService {
               coinbaseNetworkId = Coinbase.networks.BaseSepolia;
           }
           
-          // Create a wallet on the specified network
-          const wallet = await Wallet.create({ 
-            networkId: coinbaseNetworkId 
+          // Import the agent's existing wallet using the stored data
+          const wallet = await Wallet.import({
+            walletId: agent.wallet_id,
+            seed: agent.wallet_seed,
+            networkId: coinbaseNetworkId
           });
           
-          // Log the wallet address for debugging
-          const walletAddress = await wallet.getAddress();
+          // Get the wallet address
+          let walletAddress = agent.wallet_address;
+          if (!walletAddress) {
+            const addressObj = await wallet.getDefaultAddress();
+            walletAddress = addressObj.addressId || addressObj.id;
+            console.log(`Retrieved default wallet address: ${walletAddress}`);
+          }
           console.log(`Sending from wallet address: ${walletAddress}`);
           
-          // Create the transfer
-          const transfer = await wallet.createTransfer({
+          // Check the wallet balance before attempting the transfer
+          const balance = await wallet.getBalance(Coinbase.assets.Eth);
+          console.log(`Current wallet balance: ${balance} ETH`);
+          
+          if (balance < 0.0000001) {
+            throw new Error(`Insufficient funds: ${balance} ETH available, but 0.0000001 ETH required`);
+          }
+          
+          // Get the wallet's default address object to use for creating the transfer
+          const defaultAddressObj = await wallet.getDefaultAddress();
+          
+          // Create the transfer using the wallet's address
+          const transfer = await defaultAddressObj.createTransfer({
             amount: 0.0000001,
             assetId: Coinbase.assets.Eth,
             destination: recipientAddress
@@ -257,6 +285,10 @@ class ToolRegistryService {
           const status = transfer.getStatus();
           console.log(`Transfer status: ${status}`);
           
+          // Get the updated balance after transfer
+          const balanceAfter = await wallet.getBalance(Coinbase.assets.Eth);
+          console.log(`Wallet balance after transfer: ${balanceAfter} ETH`);
+          
           // Log the transaction in the agent_actions table
           await new Promise((resolve, reject) => {
             db.run(
@@ -278,7 +310,9 @@ class ToolRegistryService {
                   from_address: walletAddress,
                   to_address: recipientAddress,
                   network: networkId,
-                  completed: transferCompleted
+                  completed: transferCompleted,
+                  balance_before: balance.toString(),
+                  balance_after: balanceAfter.toString()
                 }),
                 new Date().toISOString(),
                 new Date().toISOString()
@@ -303,6 +337,8 @@ class ToolRegistryService {
             amount: 0.0000001,
             asset: "ETH",
             network: networkId,
+            balance_before: balance.toString(),
+            balance_after: balanceAfter.toString(),
             message: status === 'complete' ? 
               "Transfer completed successfully" : 
               "Transfer status: " + status
@@ -312,6 +348,22 @@ class ToolRegistryService {
           
           // Log the failed attempt
           try {
+            // Get agent information for better error logging
+            let agentInfo = {};
+            try {
+              const agent = await this.getAgentById(agentId);
+              if (agent) {
+                agentInfo = {
+                  agent_id: agent.id,
+                  wallet_id: agent.wallet_id,
+                  has_wallet_seed: !!agent.wallet_seed,
+                  wallet_address: agent.wallet_address
+                };
+              }
+            } catch (agentError) {
+              console.error("Error getting agent info for error logging:", agentError);
+            }
+            
             await new Promise((resolve, reject) => {
               db.run(
                 `INSERT INTO agent_actions (agent_id, action_type, tool_name, parameters, status, result, created_at, completed_at) 
@@ -329,7 +381,8 @@ class ToolRegistryService {
                   'failed',
                   JSON.stringify({
                     error: error.message,
-                    stack: error.stack
+                    stack: error.stack,
+                    agent_info: agentInfo
                   }),
                   new Date().toISOString(),
                   new Date().toISOString()
