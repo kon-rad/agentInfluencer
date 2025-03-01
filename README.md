@@ -1,6 +1,7 @@
 # Crypto Influencer Agent Ecosystem
 
-![Project Banner](https://i.imgur.com/placeholder.jpg)
+![Project Banner](./screenshots/background-img.png)
+
 
 ## 🏆 ETHDenver 2025 Hackathon Project
 [View on Devfolio](https://devfolio.co/projects/crypto-influencer-agent-ecosystem-6de7)
