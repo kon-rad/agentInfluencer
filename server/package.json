@@ -19,6 +19,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@coinbase/coinbase-sdk": "^0.21.0",
+    "@coinbase/wallet-sdk": "^4.3.0",
     "@farcaster/hub-nodejs": "^0.12.7",
     "apify-client": "^2.12.0",
     "axios": "^1.8.1",

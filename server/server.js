@@ -8,6 +8,9 @@ import db from './database.js';
 import { runMigrations } from './database/migrations.js';
 import toolRegistryService from './services/toolRegistryService.js';
 import agentBrainService from './services/agentBrainService.js';
+import { Coinbase } from "@coinbase/coinbase-sdk";
+import * as dotenv from 'dotenv' // see https://github.com/motdotla/dotenv#how-do-i-use-dotenv-with-import
+dotenv.config()
 
 // Get current file path (ES Modules equivalent of __dirname)
 const __filename = fileURLToPath(import.meta.url);
@@ -69,6 +72,17 @@ async function initializeApp() {
       console.error('Agent brain service initialization failed:', error);
       throw error;
     }
+
+    // Initialize Coinbase SDK
+    try {
+      Coinbase.configure({
+        apiKeyName: process.env.COINBASE_API_KEY_NAME,
+        privateKey: process.env.COINBASE_API_PRIVATE_KEY
+      });
+      console.log('Coinbase SDK initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize Coinbase SDK', error);
+    }
     
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
@@ -104,4 +118,4 @@ app.use((err, req, res, next) => {
 });
 
 // Export the database connection for use in other files
-export default db; 
+export default db;

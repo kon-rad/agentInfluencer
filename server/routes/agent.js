@@ -2,6 +2,7 @@ import express from 'express';
 import logger from '../utils/logger.js';
 import db from '../database.js';
 import agentBrainService from '../services/agentBrainService.js';
+import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
 
 const router = express.Router();
 
@@ -101,19 +102,81 @@ router.get('/', async (req, res, next) => {
 // Get single agent
 router.get('/:id', async (req, res) => {
   try {
-    const agent = await db.get('SELECT * FROM agents WHERE id = ?', [req.params.id]);
+    const agent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [req.params.id], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
+    
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
+    console.log("agent ---- ", agent);
+    
+    
+    // Get wallet balance and address if wallet_seed exists
+    let walletBalance = '0';
+    let walletAddress = agent.wallet_address;
+    
+    if (agent.wallet_seed && agent.wallet_id) {
+      try {
+        // Re-instantiate the wallet using the stored data
+        const importedWallet = await Wallet.import({
+          id: agent.wallet_id,
+          seed: agent.wallet_seed,
+          networkId: Coinbase.networks.BaseSepolia
+        });
+        
+        console.log(`Wallet imported for agent ${agent.id} with ID: ${importedWallet.getId()}`);
+        
+        // If we don't have a wallet address stored, get the default address
+        if (!walletAddress) {
+          const addressObj = await importedWallet.getDefaultAddress();
+          walletAddress = addressObj.addressId; // Extract the address string
+          console.log(`Default wallet address for agent ${agent.id}: ${walletAddress}`);
+          
+          // Update the agent record with the wallet address
+          await new Promise((resolve, reject) => {
+            db.run('UPDATE agents SET wallet_address = ? WHERE id = ?', 
+              [walletAddress, agent.id], 
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          });
+        }
+        
+        // Fetch the ETH balance
+        const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
+        walletBalance = balance.toString();
+        console.log(`Wallet balance for agent ${agent.id}: ${walletBalance} ETH`);
+      } catch (walletError) {
+        console.error('Error fetching wallet details:', walletError);
+        // Continue without balance if there's an error
+      }
+    }
+    
+    console.log("Get single agent agent:", agent);
+    
     // Format the response to match the Agent interface
     const formattedAgent = {
       ...agent,
+      id: agent.id,
       is_running: Boolean(agent.is_running),
       tools: agent.tools ? JSON.parse(agent.tools) : [],
       description: agent.personality || 'No description available',
       image_url: agent.image_url || null,
       created_at: agent.created_at || new Date().toISOString(),
-      updated_at: agent.updated_at || new Date().toISOString()
+      updated_at: agent.updated_at || new Date().toISOString(),
+      wallet_address: walletAddress,
+      wallet_balance: walletBalance,
+      // Format frequency in seconds for display
+      frequency_seconds: agent.frequency ? Math.floor(agent.frequency / 1000) : 3600
     };
     res.json(formattedAgent);
   } catch (error) {
@@ -149,45 +212,100 @@ router.post('/', async (req, res) => {
       throw new Error('Database connection not established');
     }
 
-    // Simplified insertion approach
-    const result = await db.run(`
-      INSERT INTO agents (
-        name, personality, model_name, frequency,
-        telegram_bot_token, tools, is_running,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      name,
-      personality || '',
-      model_name || 'gpt-4-turbo-preview',
-      frequency || 3600000,
-      telegram_bot_token || null,
-      JSON.stringify(tools || []),
-      0,
-      now,
-      now
-    ]);
+    // Create a wallet for the agent
+    let wallet;
+    try {
+      wallet = await Wallet.create({ networkId: Coinbase.networks.BaseSepolia });
+      console.log(`Wallet created for agent ${name} with ID: ${wallet.getId()}`);
+      
+      // Get the default address
+      const defaultAddressObj = await wallet.getDefaultAddress();
+      console.log(`Default wallet address for agent ${name}: ${defaultAddressObj}`);
+      
+      // Extract the actual address string from the address object
+      console.log("defaultAddressObj: --- ", defaultAddressObj, JSON.stringify(defaultAddressObj))
+      
+      // Export wallet data (contains seed and ID)
+      const walletData = await wallet.export();
+      const walletId = walletData.walletId;
 
-    console.log('💾 Agent inserted into database, fetching newly created agent');
+      console.log(`Wallet data exported for agent ${name}`);
+      console.log(`Wallet data walletDatat ${walletData}`, JSON.stringify(walletData));
+      console.log(`Wallet ID: ${walletId}`);
+      console.log(`Wallet seed: ${walletData.seed}`);
 
-    // Get the newly created agent
-    const agent = await db.get('SELECT * FROM agents WHERE rowid = last_insert_rowid()');
-    
-    if (!agent) {
-      throw new Error('Agent created but not found on verification query');
-    }
+      
+      const defaultAddress = defaultAddressObj.id;
+      console.log("defaultAddress ---ffff ", defaultAddress)
+      // Simplified insertion approach
+      const result = await new Promise((resolve, reject) => {
+        db.run(`
+          INSERT INTO agents (
+            name, personality, model_name, frequency,
+            telegram_bot_token, tools, is_running,
+            created_at, updated_at, wallet_id, wallet_seed, wallet_address
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          name,
+          personality || '',
+          model_name || 'gpt-4-turbo-preview',
+          frequency || 3600000,
+          telegram_bot_token || null,
+          JSON.stringify(tools || []),
+          0,
+          now,
+          now,
+          walletId, // Store wallet ID directly from wallet object
+          walletData.seed, // Store wallet seed from export data
+          defaultAddress // Store the address string, not the object
+        ], function(err) {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(this);
+          }
+        });
+      });
 
-    console.log('✅ Agent created successfully:', agent.id);
+      console.log('💾 Agent inserted into database, fetching newly created agent');
 
-    res.status(201).json({
-      success: true,
-      message: 'Agent created successfully',
-      data: {
-        ...agent,
-        is_running: Boolean(agent.is_running),
-        tools: agent.tools ? JSON.parse(agent.tools) : []
+      // Get the newly created agent
+      const agent = await new Promise((resolve, reject) => {
+        db.get('SELECT * FROM agents WHERE rowid = last_insert_rowid()', (err, row) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(row);
+          }
+        });
+      });
+      
+      if (!agent) {
+        throw new Error('Agent created but not found on verification query');
       }
-    });
+
+      console.log('✅ Agent created successfully:', agent.id);
+
+      res.status(201).json({
+        success: true,
+        message: 'Agent created successfully',
+        data: {
+          ...agent,
+          is_running: Boolean(agent.is_running),
+          tools: agent.tools ? JSON.parse(agent.tools) : [],
+          wallet_id: walletId, // Include wallet ID in response
+          wallet_address: defaultAddress, // Include wallet address in response
+          wallet_seed: walletData.seed // Include wallet seed in response
+        }
+      });
+    } catch (error) {
+      console.error('Error in wallet creation or agent insertion:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create agent with wallet',
+        error: error.message
+      });
+    }
   } catch (error) {
     console.error('❌ Error creating agent:', error.message);
     logError(error, 'POST /agents');
@@ -220,7 +338,15 @@ router.patch('/:id', async (req, res) => {
     const values = [...fields.map(f => f === 'tools' ? JSON.stringify(updates[f]) : updates[f]), new Date().toISOString(), id];
     
     await db.run(sql, values);
-    const agent = await db.get('SELECT * FROM agents WHERE id = ?', [id]);
+    const agent = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM agents WHERE id = ?', [id], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
     
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
@@ -250,7 +376,15 @@ router.delete('/:id', async (req, res) => {
 // Get agent status
 router.get('/:agentId/status', async (req, res, next) => {
   try {
-    const status = await db.get('SELECT is_running FROM agents WHERE id = ?', [req.params.agentId]);
+    const status = await new Promise((resolve, reject) => {
+      db.get('SELECT is_running FROM agents WHERE id = ?', [req.params.agentId], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
     res.json({ is_running: status ? Boolean(status.is_running) : false });
   } catch (error) {
     next(error);
@@ -375,14 +509,24 @@ router.get('/:agentId/thoughts', async (req, res) => {
       });
     }
 
-    const thoughts = await db.all(
-      `SELECT id, agent_id, type, content, timestamp, model_name 
-       FROM agent_thoughts 
-       WHERE agent_id = ? 
-       ORDER BY timestamp DESC 
-       LIMIT 10`,
-      [req.params.agentId]
-    );
+    const thoughts = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT id, agent_id, type, content, timestamp, model_name 
+         FROM agent_thoughts 
+         WHERE agent_id = ? 
+         ORDER BY timestamp DESC 
+         `,
+        [req.params.agentId],
+        (err, rows) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(rows);
+          }
+        }
+      );
+    });
+    // console.log("thoughts: ", thoughts)
 
     res.json(thoughts || []);
 
@@ -489,12 +633,20 @@ router.get('/:agentId/news', async (req, res) => {
       return res.json([]);
     }
 
-    const news = await db.all(`
-      SELECT * FROM agent_news 
-      WHERE agent_id = ? 
-      ORDER BY published_at DESC 
-      LIMIT 10
-    `, [req.params.agentId]);
+    const news = await new Promise((resolve, reject) => {
+      db.all(`
+        SELECT * FROM agent_news 
+        WHERE agent_id = ? 
+        ORDER BY published_at DESC 
+        LIMIT 10
+      `, [req.params.agentId], (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
 
     // Format the news items to match the News interface
     const formattedNews = news.map(item => ({
@@ -532,12 +684,20 @@ router.get('/:agentId/actions', async (req, res) => {
       });
     }
 
-    const actions = await db.all(`
-      SELECT * FROM agent_actions 
-      WHERE agent_id = ? 
-      ORDER BY created_at DESC 
-      LIMIT 10
-    `, [agentId]);
+    const actions = await new Promise((resolve, reject) => {
+      db.all(`
+        SELECT * FROM agent_actions 
+        WHERE agent_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT 10
+      `, [agentId], (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
 
     res.json({
       success: true,

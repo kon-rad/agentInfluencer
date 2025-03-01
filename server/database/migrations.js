@@ -363,6 +363,98 @@ export const runMigrations = async () => {
             });
           });
         }
+      },
+      {
+        name: '010_add_wallet_id_and_seed_to_agents',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              db.run(`
+                ALTER TABLE agents
+                ADD COLUMN wallet_id TEXT
+              `, (err) => {
+                if (err) {
+                  console.error('Error adding wallet_id to agents:', err);
+                  reject(err);
+                  return;
+                }
+
+                db.run(`
+                  ALTER TABLE agents
+                  ADD COLUMN wallet_seed TEXT
+                `, (err) => {
+                  if (err) {
+                    console.error('Error adding wallet_seed to agents:', err);
+                    reject(err);
+                    return;
+                  }
+                  resolve();
+                });
+              });
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              db.run(`
+                ALTER TABLE agents
+                DROP COLUMN wallet_id
+              `, (err) => {
+                if (err) {
+                  console.error('Error dropping wallet_id from agents:', err);
+                  reject(err);
+                  return;
+                }
+
+                db.run(`
+                  ALTER TABLE agents
+                  DROP COLUMN wallet_seed
+                `, (err) => {
+                  if (err) {
+                    console.error('Error dropping wallet_seed from agents:', err);
+                    reject(err);
+                    return;
+                  }
+                  resolve();
+                });
+              });
+            });
+          });
+        }
+      },
+      {
+        name: '011_add_wallet_address_to_agents',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              ALTER TABLE agents
+              ADD COLUMN wallet_address TEXT
+            `, (err) => {
+              if (err) {
+                console.error('Error adding wallet_address to agents:', err);
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              ALTER TABLE agents
+              DROP COLUMN wallet_address
+            `, (err) => {
+              if (err) {
+                console.error('Error dropping wallet_address from agents:', err);
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        }
       }
     ];
 

@@ -426,21 +426,6 @@ class AgentBrainService {
     });
   }
 
-  async parseAction(response) {
-    // Implementation of parseAction method
-  }
-
-  async recordToolAction(agentId, toolName, parameters) {
-    // Implementation of recordToolAction method
-  }
-
-  async updateToolAction(actionId, status, result) {
-    // Implementation of updateToolAction method
-  }
-
-  async updateLastRunTime(agentId) {
-    // Implementation of updateLastRunTime method
-  }
 }
 
 // Create and export a singleton instance

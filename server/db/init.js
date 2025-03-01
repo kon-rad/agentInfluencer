@@ -1,68 +1,112 @@
-const db = require('./index');
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
+import logger from '../utils/logger.js';
 
-async function initDatabase() {
+async function initializeDatabase() {
   try {
-    // Agents table
-    await db.run(`
+    const db = await open({
+      filename: './database.db',
+      driver: sqlite3.Database
+    });
+
+    // Enable foreign key support
+    await db.exec('PRAGMA foreign_keys = ON;');
+
+    // Create agents table
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         personality TEXT,
-        model_name TEXT DEFAULT 'gpt-4-turbo-preview',
-        frequency INTEGER DEFAULT 3600000,
-        is_running BOOLEAN DEFAULT 0,
-        last_run DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        model_name TEXT,
+        frequency INTEGER,
+        telegram_bot_token TEXT,
+        tools TEXT,
+        is_running INTEGER DEFAULT 0,
+        created_at DATETIME,
+        updated_at DATETIME,
+        wallet_id TEXT,  -- Add wallet_id field
+        wallet_seed TEXT   -- Add wallet_seed field
       )
     `);
 
-    // Agent thoughts table (updated with agent_id)
-    await db.run(`
+    // Create agent_config table
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        personality TEXT,
+        frequency INTEGER,
+        model_name TEXT,
+        is_running INTEGER DEFAULT 0,
+        created_at DATETIME,
+        updated_at DATETIME
+      )
+    `);
+
+    // Create agent_thoughts table
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS agent_thoughts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id INTEGER NOT NULL,
-        thought TEXT NOT NULL,
+        agent_id INTEGER,
+        type TEXT,
+        content TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        model_name TEXT,
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+
+    // Create agent_actions table
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id INTEGER,
+        action_type TEXT,
+        description TEXT,
+        details TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (agent_id) REFERENCES agents (id)
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
       )
     `);
 
-    // Tweets table
-    await db.run(`
-      CREATE TABLE IF NOT EXISTS tweets (
+    // Create agent_news table
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_news (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        agent_id INTEGER,
+        title TEXT,
+        content TEXT,
+        source TEXT,
+        published_at DATETIME,
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
       )
     `);
 
-    // Engagements table
-    await db.run(`
-      CREATE TABLE IF NOT EXISTS engagements (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tweet_id INTEGER,
-        type TEXT CHECK(type IN ('like', 'retweet', 'reply')),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (tweet_id) REFERENCES tweets (id)
-      )
-    `);
+    // Insert default agent configuration if it doesn't exist
+    const defaultConfig = await db.get('SELECT COUNT(*) as count FROM agent_config WHERE id = 1');
+    if (defaultConfig.count === 0) {
+      await db.run(`
+        INSERT INTO agent_config (
+          id, personality, frequency, model_name, is_running, created_at, updated_at
+        ) VALUES (
+          1,
+          'You are a helpful AI assistant.',
+          3600000,
+          'gpt-4-turbo-preview',
+          0,
+          DATETIME('now'),
+          DATETIME('now')
+        )
+      `);
+      logger.info('Default agent configuration inserted.');
+    }
 
-    // Campaigns table
-    await db.run(`
-      CREATE TABLE IF NOT EXISTS campaigns (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        status TEXT CHECK(status IN ('active', 'completed', 'cancelled')) DEFAULT 'active',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    console.log('Database initialized successfully');
+    logger.info('Database initialized successfully.');
+    return db;
   } catch (error) {
-    console.error('Error initializing database:', error);
+    logger.error('Failed to initialize database:', error);
     throw error;
   }
 }
 
-initDatabase(); 
+export default initializeDatabase; 

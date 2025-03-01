@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, ActivityIndicator, RefreshControl, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { useRouter } from 'expo-router';
@@ -22,7 +22,12 @@ interface Agent {
   model_name: string;
   personality: string;
   last_run?: string;
-  tools?: { id: number; tool_name: string; description: string }[];
+  tools?: { id: number; tool_name: string; description: string }[] | string[];
+  wallet_address?: string;
+  wallet_balance?: string;
+  wallet_id?: string;
+  wallet_seed?: string;
+  frequency_seconds?: number;
 }
 
 interface News {
@@ -71,7 +76,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
   };
 
   const fetchNews = async () => {
-    if (!agent?.tools?.some(tool => tool.tool_name.toLowerCase().includes('news'))) {
+    if (!agent?.tools?.some(tool => tool?.tool_name?.toLowerCase().includes('news'))) {
       return;
     }
 
@@ -161,8 +166,13 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
       <View style={styles.profileSection}>
         <View style={styles.profileImageContainer}>
           <Image 
-            source={{ uri: agent.image_url || 'https://via.placeholder.com/200' }}
             style={styles.profileImage}
+            source={
+              agent.image_url 
+                ? { uri: agent.image_url }
+                : require('../assets/images/agent-placeholder.png')
+            }
+            defaultSource={require('../assets/images/agent-placeholder.png')}
           />
         </View>
         
@@ -190,13 +200,87 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Agent Tools</Text>
-        {agent.tools?.map((tool) => (
-          <View key={tool.id} style={styles.toolItem}>
-            <Text style={styles.toolName}>{tool.tool_name}</Text>
-            <Text style={styles.toolDescription}>{tool.description}</Text>
+        <Text style={styles.sectionTitle}>Agent Information</Text>
+        <View style={styles.infoContainer}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Agent ID:</Text>
+            <Text style={styles.infoValue}>{agent.id}</Text>
           </View>
-        ))}
+          
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Model:</Text>
+            <Text style={styles.infoValue}>{agent.model_name || 'Not specified'}</Text>
+          </View>
+          
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Run Frequency:</Text>
+            <Text style={styles.infoValue}>
+              {agent.frequency_seconds ? `Every ${agent.frequency_seconds} seconds` : 'Not specified'}
+            </Text>
+          </View>
+          
+          {agent.last_run && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Last Run:</Text>
+              <Text style={styles.infoValue}>
+                {new Date(agent.last_run).toLocaleString()}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Agent Tools</Text>
+        {Array.isArray(agent.tools) && agent.tools.length > 0 ? (
+          agent.tools.map((tool, index) => {
+            if (typeof tool === 'string') {
+              return (
+                <View key={index} style={styles.toolItem}>
+                  <Text style={styles.toolName}>{tool}</Text>
+                </View>
+              );
+            } else if (typeof tool === 'object' && tool !== null) {
+              return (
+                <View key={tool.id || index} style={styles.toolItem}>
+                  <Text style={styles.toolName}>{tool.tool_name}</Text>
+                  {tool.description && <Text style={styles.toolDescription}>{tool.description}</Text>}
+                </View>
+              );
+            }
+            return null;
+          })
+        ) : (
+          <View style={styles.toolItem}>
+            <Text style={styles.toolName}>No tools configured</Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Wallet Information</Text>
+        <View style={styles.walletContainer}>
+          <View style={styles.walletAddressContainer}>
+            <Text style={styles.walletLabel}>Wallet Address:</Text>
+            <Text style={styles.walletAddress} selectable={true}>
+              {agent.wallet_address || agent.wallet_id || 'Not configured'}
+            </Text>
+          </View>
+          <View style={styles.walletBalanceContainer}>
+            <Text style={styles.walletLabel}>ETH Balance:</Text>
+            <Text style={styles.walletBalance}>
+              {agent.wallet_balance || '0'} ETH
+            </Text>
+          </View>
+          {agent.wallet_seed && (
+            <View style={styles.walletSeedContainer}>
+              <Text style={styles.walletLabel}>Wallet Seed:</Text>
+              <Text style={styles.walletSeed} selectable={true} numberOfLines={1} ellipsizeMode="middle">
+                {agent.wallet_seed}
+              </Text>
+            </View>
+          )}
+        </View>
       </View>
 
       {news.length > 0 && (
@@ -390,5 +474,61 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: '#14171A',
+  },
+  infoContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  infoLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    width: 120,
+  },
+  infoValue: {
+    fontSize: 14,
+    flex: 1,
+    color: '#1A1B1F',
+  },
+  walletContainer: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  walletAddressContainer: {
+    marginBottom: 10,
+  },
+  walletBalanceContainer: {
+    marginBottom: 10,
+  },
+  walletSeedContainer: {
+    marginBottom: 4,
+  },
+  walletLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  walletAddress: {
+    fontSize: 14,
+    color: '#1DA1F2',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  walletBalance: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#17BF63',
+  },
+  walletSeed: {
+    fontSize: 12,
+    color: '#657786',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
 }); 
