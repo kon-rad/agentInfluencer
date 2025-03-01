@@ -83,7 +83,7 @@ cd devrelagent
 npm install
 
 # Start the Expo development server
-npm start
+npx expo start
 ```
 
 This will open the Expo developer tools in your browser. From there, you can:
