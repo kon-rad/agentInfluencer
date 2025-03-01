@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
+import { apiClient } from '../../utils/api';
 import { useRouter } from 'expo-router';
 
 interface Agent {
   id: number;
   name: string;
   description: string;
-  image_url: string;
+  image_url: string | null;
   is_running: boolean;
   model_name: string;
+  personality: string;
+  frequency: string;
+  created_at: string;
+  updated_at: string;
   last_run?: string;
 }
 
@@ -23,13 +27,28 @@ export default function AgentScreen() {
 
   const fetchAgents = async () => {
     try {
-      const response = await axios.get('http://localhost:3000/api/agents');
-      if (response.data && Array.isArray(response.data)) {
-        setAgents(response.data);
+      setError(null);
+      const response = await apiClient.get('/agents');
+      
+      console.log('response: ', response);
+      if (!response || !response.data) {
+        throw new Error('No data received from server');
       }
+      console.log('response: 2', response);
+      
+      
+      const { data } = response;
+      if (!response.success) {
+        throw new Error(response.message || 'Failed to load agents');
+      }
+      console.log('response: 3', response);
+      
+      setAgents(data);
+      console.log('response: 4', response);
+      
     } catch (error) {
       console.error('Error fetching agents:', error);
-      setError('Failed to load agents');
+      setError('Failed to load agents. Please try again. zzz');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -63,7 +82,7 @@ export default function AgentScreen() {
         <View style={styles.agentInfo}>
           <Text style={styles.agentName}>{item.name}</Text>
           <Text style={styles.agentDescription} numberOfLines={2}>
-            {item.description}
+            {item.description || 'No description available'}
           </Text>
           <View style={styles.agentMeta}>
             <View style={[
@@ -73,11 +92,23 @@ export default function AgentScreen() {
             <Text style={styles.statusText}>
               {item.is_running ? 'Active' : 'Inactive'}
             </Text>
-            <Text style={styles.modelName}>{item.model_name}</Text>
+            <Text style={styles.modelName}>{item.model_name || 'No model'}</Text>
           </View>
+          {item.last_run && (
+            <Text style={styles.lastRun}>
+              Last run: {new Date(item.last_run).toLocaleDateString()}
+            </Text>
+          )}
         </View>
       </View>
     </TouchableOpacity>
+  );
+
+  const EmptyListComponent = () => (
+    <View style={styles.emptyContainer}>
+      <Text style={styles.emptyText}>No agents available</Text>
+      <Text style={styles.emptySubtext}>Create your first agent to get started</Text>
+    </View>
   );
 
   if (loading && !refreshing) {
@@ -94,26 +125,31 @@ export default function AgentScreen() {
         <Text style={styles.headerTitle}>AI Agents</Text>
         <TouchableOpacity 
           style={styles.addButton}
-          onPress={() => router.push('/agent/create')}
+          onPress={() => router.push('/agents/create')}
         >
           <Ionicons name="add-circle-outline" size={24} color="#1DA1F2" />
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={agents}
-        renderItem={renderAgentItem}
-        keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={styles.listContainer}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No agents available</Text>
-          </View>
-        }
-      />
+      {error ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchAgents}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={agents}
+          renderItem={renderAgentItem}
+          keyExtractor={(item) => item.id.toString()}
+          contentContainerStyle={styles.listContainer}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          ListEmptyComponent={!loading && EmptyListComponent}
+        />
+      )}
     </View>
   );
 }
@@ -203,11 +239,45 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   emptyText: {
+    fontSize: 18,
     color: '#657786',
-    fontSize: 16,
+    marginBottom: 8,
   },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#AAB8C2',
+    textAlign: 'center',
+  },
+  lastRun: {
+    fontSize: 12,
+    color: '#657786',
+    marginTop: 4,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    color: '#E0245E',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: '#1DA1F2',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  }
 }); 

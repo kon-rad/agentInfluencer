@@ -36,7 +36,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
 
   const fetchAgentDetails = async () => {
     try {
-      const response = await axios.get(`http://localhost:3000/api/agent/${agentId}`);
+      const response = await axios.get(`http://localhost:3000/api/agents/${agentId}`);
       if (response.data) {
         setAgent(response.data);
       }
@@ -48,7 +48,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
 
   const fetchAgentThoughts = async () => {
     try {
-      const response = await axios.get(`http://localhost:3000/api/agent/${agentId}/thoughts`);
+      const response = await axios.get(`http://localhost:3000/api/agents/${agentId}/thoughts`);
       if (response.data && Array.isArray(response.data)) {
         setThoughts(response.data);
       }
@@ -62,7 +62,7 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
     if (!agent) return;
     
     try {
-      const response = await axios.post(`http://localhost:3000/api/agent/${agentId}/toggle`, {
+      const response = await axios.post(`http://localhost:3000/api/agents/${agentId}/toggle`, {
         is_running: !agent.is_running
       });
       
@@ -125,7 +125,9 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
           <Ionicons name="arrow-back" size={24} color="#1DA1F2" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Agent Details</Text>
-        <View style={{ width: 24 }} /> {/* Spacer for alignment */}
+        <TouchableOpacity onPress={() => router.push(`/agent/${agentId}/config`)}>
+          <Ionicons name="settings-outline" size={24} color="#1DA1F2" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.profileSection}>

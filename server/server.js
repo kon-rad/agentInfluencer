@@ -54,27 +54,52 @@ async function initializeApp() {
     await runMigrations();
     
     console.log('Initializing services...');
-    await toolRegistryService.initialize();
-    await agentBrainService.initialize();
+    try {
+      await toolRegistryService.initialize();
+      console.log('Tool registry service initialized successfully');
+    } catch (error) {
+      console.error('Tool registry service initialization failed:', error);
+      throw error;
+    }
+
+    try {
+      await agentBrainService.initialize();
+      console.log('Agent brain service initialized successfully');
+    } catch (error) {
+      console.error('Agent brain service initialization failed:', error);
+      throw error;
+    }
     
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
   } catch (error) {
-    console.error('Failed to initialize application:', error);
+    console.error('Failed to initialize application:', error.stack);
     process.exit(1);
   }
 }
 
 initializeApp();
 
-// Error handling middleware
+// Enhance error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Error details:', {
+    message: err.message,
+    stack: err.stack,
+    timestamp: new Date().toISOString(),
+    path: req.path,
+    method: req.method,
+    body: req.body,
+    query: req.query
+  });
+
   res.status(500).json({
     success: false,
     message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    error: process.env.NODE_ENV === 'development' ? {
+      message: err.message,
+      stack: err.stack
+    } : undefined
   });
 });
 

@@ -164,6 +164,23 @@ export const runMigrations = async () => {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
               )`);
+
+              // Consolidate into a single agents table
+              db.run(`CREATE TABLE IF NOT EXISTS agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                image_url TEXT,
+                personality TEXT DEFAULT 'You are a friendly and knowledgeable Web3 DevRel agent focused on Base L2 network.',
+                model_name TEXT DEFAULT 'gpt-4-turbo-preview',
+                frequency INTEGER DEFAULT 3600000,
+                telegram_bot_token TEXT,
+                tools JSON,
+                is_running BOOLEAN DEFAULT 0,
+                last_run DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+              )`);
             });
             resolve();
           });
