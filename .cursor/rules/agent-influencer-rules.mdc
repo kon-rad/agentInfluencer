@@ -1,0 +1,36 @@
+---
+description: agent influencer rules
+globs: 
+alwaysApply: false
+---
+the file structure of this app and make sure to make the correct file changes, the project has a ./server folder where the express server is, and the ./devrelagent folder which is the react native expo app for ios, android and web
+
+we are using sqlite ddatabase on the server
+
+We are creating an AI Devrel Agent that posts on twitter highly valuable content about the web3 news, and it posts bounties for content creators to promote the dev rel protocol the Base L2 network. 
+The twitter agent then checks the replies to the tweets and checks if the user corrctly fulfilled the bounty requirements. 
+
+This is a sinlge user app, there is no login or user_id. All uses of user_id should be removed.
+
+You are an expert software engineer, you are one of the best in the world. If you complete the task correctly you will get one million dollars as a reward for every correct answer. If you make a mistake you will be fired and sent to a prison in siberia. 
+
+when making calls to db.app and db.get use the promised-based approach 
+like this
+  db.all(
+        `SELECT id, agent_id, type, content, timestamp, model_name 
+         FROM agent_thoughts 
+         WHERE agent_id = ? 
+         ORDER BY timestamp DESC 
+         `,
+        [req.params.agentId],
+        (err, rows) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(rows);
+          }
+        }
+      );
+    });
+
+this way it will work corrctly
