@@ -1,6 +1,14 @@
 // Default tools configuration for agents
 const defaultTools = [
   {
+    tool_name: "create_short_form_video",
+    description: "Creates a short-form video for social media marketing campaigns",
+    parameters: JSON.stringify({
+      prompt: "string - Description of the video content to generate"
+    }),
+    usage_format: "ACTION: create_short_form_video\nPARAMETERS: {\n  \"prompt\": \"Create an engaging 30-second video about Base L2's latest features\"\n}\nREASON: To generate engaging social media content about Base L2"
+  },
+  {
     tool_name: "CreateBountyTool",
     description: "Creates a new bounty for content creators and posts it to Twitter",
     parameters: JSON.stringify({
@@ -39,12 +47,12 @@ const defaultTools = [
   },
   {
     tool_name: "CryptoTransferTool",
-    description: "Sends a small amount of ETH (0.0000001) to a specified address using Coinbase SDK",
+    description: "Sends a small amount of MNT (0.0000001) to a specified address on Mantle network",
     parameters: JSON.stringify({
       recipient_address: "string - Optional recipient address (defaults to 0xa01dD443827F88Ba34FefFA8949144BaB122D736 if not provided)",
-      network_id: "string - Optional network ID (defaults to Base Mainnet)"
+      network_id: "string - Optional network ID (defaults to 'mantle-testnet')"
     }),
-    usage_format: "ACTION: CryptoTransferTool\nPARAMETERS: {\n  \"recipient_address\": \"0xa01dD443827F88Ba34FefFA8949144BaB122D736\",\n  \"network_id\": \"base-mainnet\"\n}\nREASON: To send a small amount of ETH as a reward for completing a bounty"
+    usage_format: "ACTION: CryptoTransferTool\nPARAMETERS: {\n  \"recipient_address\": \"0xa01dD443827F88Ba34FefFA8949144BaB122D736\",\n  \"network_id\": \"mantle-testnet\"\n}\nREASON: To send a small amount of MNT as a reward for completing a bounty"
   }
 ];
 

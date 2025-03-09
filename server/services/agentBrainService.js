@@ -9,6 +9,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
 import agentToolService from './agentToolService.js';
 import agentTable from '../db/tables/AgentTable.js';
+import ethers from 'ethers';
 
 dotenv.config();
 
@@ -182,19 +183,32 @@ class AgentBrainService {
             const importedWallet = await Wallet.import({
                 walletId: agent.wallet_id,
                 seed: agent.wallet_seed,
-                networkId: Coinbase.networks.BaseSepolia
+                networkConfig: {
+                    chainId: 5001,
+                    chainName: 'Mantle Testnet',
+                    nativeCurrency: {
+                        name: 'MNT',
+                        symbol: 'MNT',
+                        decimals: 18
+                    },
+                    rpcUrls: ['https://rpc.testnet.mantle.xyz'],
+                    blockExplorerUrls: ['https://explorer.testnet.mantle.xyz']
+                }
             });
 
             console.log('Wallet imported successfully:', importedWallet.getId());
 
-            const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
-            console.log('Wallet balance retrieved:', balance.toString());
+            // Get balance using ethers.js provider instead of Coinbase SDK
+            const provider = new ethers.providers.JsonRpcProvider('https://rpc.testnet.mantle.xyz');
+            const wallet = new ethers.Wallet(agent.wallet_seed, provider);
+            const balance = await provider.getBalance(wallet.address);
+            const formattedBalance = ethers.utils.formatEther(balance);
+            console.log('Wallet balance retrieved:', formattedBalance);
             
             // If wallet address is not stored, get it from the wallet
             if (!agent.wallet_address) {
-                const addressObj = await importedWallet.getDefaultAddress();
-                agent.wallet_address = addressObj.addressId;
-                console.log('Retrieved default wallet address:', agent.wallet_address);
+                agent.wallet_address = wallet.address;
+                console.log('Retrieved wallet address:', agent.wallet_address);
                 
                 // Update the agent record with the wallet address
                 await new Promise((resolve, reject) => {
@@ -207,7 +221,7 @@ class AgentBrainService {
                 });
             }
 
-            walletInfo = `Wallet Address: ${agent.wallet_address}\nWallet Balance: ${balance.toString()} ETH`;
+            walletInfo = `Wallet Address: ${agent.wallet_address}\nWallet Balance: ${formattedBalance} MNT`;
         } catch (error) {
             console.error('Error fetching wallet details:', error);
             walletInfo = 'Wallet: Error fetching details';

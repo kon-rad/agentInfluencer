@@ -2,10 +2,64 @@ import express from 'express';
 import logger from '../utils/logger.js';
 import db from '../database.js';
 import agentBrainService from '../services/agentBrainService.js';
-import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
 import agentToolService from '../services/agentToolService.js';
+import { ethers } from 'ethers';
+import { Coinbase, Wallet } from "@coinbase/coinbase-sdk";
+
+// Configure Coinbase SDK for Mantle network
+Coinbase.configure({
+  apiKeyName: process.env.COINBASE_API_KEY_NAME,
+  privateKey: process.env.COINBASE_API_PRIVATE_KEY,
+  // Configure for Mantle testnet
+  networkConfig: {
+    chainId: 5001,
+    chainName: 'Mantle Testnet',
+    nativeCurrency: {
+      name: 'MNT',
+      symbol: 'MNT',
+      decimals: 18
+    },
+    rpcUrls: ['https://rpc.testnet.mantle.xyz'],
+    blockExplorerUrls: ['https://explorer.testnet.mantle.xyz']
+  }
+});
 
 const router = express.Router();
+
+// Mantle Network Configuration
+const MANTLE_NETWORKS = {
+  mainnet: {
+    chainId: 5000,
+    rpcUrl: 'https://rpc.mantle.xyz',
+    name: 'Mantle Mainnet',
+    symbol: 'MNT',
+    explorer: 'https://explorer.mantle.xyz'
+  },
+  testnet: {
+    chainId: 5001,
+    rpcUrl: 'https://rpc.testnet.mantle.xyz',
+    name: 'Mantle Testnet',
+    symbol: 'MNT',
+    explorer: 'https://explorer.testnet.mantle.xyz'
+  }
+};
+
+// Helper function to create Mantle provider
+const getMantleProvider = (isTestnet = true) => {
+  const network = isTestnet ? MANTLE_NETWORKS.testnet : MANTLE_NETWORKS.mainnet;
+  return new ethers.providers.JsonRpcProvider(network.rpcUrl);
+};
+
+// Helper function to create Mantle wallet
+const createMantleWallet = async (isTestnet = true) => {
+  const provider = getMantleProvider(isTestnet);
+  const wallet = ethers.Wallet.createRandom().connect(provider);
+  return {
+    address: wallet.address,
+    privateKey: wallet.privateKey,
+    provider: provider
+  };
+};
 
 // Simplified middleware that skips authentication
 const skipAuth = (req, res, next) => next();
@@ -122,31 +176,83 @@ router.get('/:id', async (req, res) => {
     const agentTools = await agentToolService.getAgentTools(req.params.id);
     console.log(`Tools fetched for agent ${agent.id}:`, agentTools);
     
+    // Get agent videos
+    const videos = await new Promise((resolve, reject) => {
+      db.all(`
+        SELECT 
+          av.*,
+          GROUP_CONCAT(
+            json_object(
+              'id', vs.id,
+              'scene_number', vs.scene_number,
+              'prompt', vs.prompt,
+              'status', vs.status,
+              'error', vs.error
+            )
+          ) as scenes
+        FROM agent_videos av
+        LEFT JOIN video_scenes vs ON av.id = vs.video_id
+        WHERE av.agent_id = ?
+        GROUP BY av.id
+        ORDER BY av.created_at DESC
+      `, [req.params.id], (err, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // Parse the scenes JSON string for each video
+        const formattedVideos = rows.map(video => ({
+          ...video,
+          scenes: video.scenes ? JSON.parse(`[${video.scenes}]`) : []
+        }));
+        
+        resolve(formattedVideos);
+      });
+    });
+    console.log(`Videos fetched for agent ${agent.id}:`, videos);
+    
     // Get wallet balance and address if wallet_seed exists
     let walletBalance = '0';
     let walletAddress = agent.wallet_address;
     
     if (agent.wallet_seed && agent.wallet_id) {
       try {
+        // Configure Coinbase SDK for Mantle network
+        const mantleNetwork = {
+          chainId: 5001,
+          chainName: 'Mantle Testnet',
+          nativeCurrency: {
+            name: 'MNT',
+            symbol: 'MNT',
+            decimals: 18
+          },
+          rpcUrls: ['https://rpc.testnet.mantle.xyz'],
+          blockExplorerUrls: ['https://explorer.testnet.mantle.xyz']
+        };
+
         // Re-instantiate the wallet using the stored data
         const importedWallet = await Wallet.import({
           walletId: agent.wallet_id,
           seed: agent.wallet_seed,
-          networkId: Coinbase.networks.BaseSepolia
+          networkConfig: mantleNetwork
         });
         
         console.log(`Wallet imported for agent ${agent.id} with ID: ${importedWallet.getId()}`);
         
-        // If we don't have a wallet address stored, get the default address
-        if (!walletAddress) {
-          const addressObj = await importedWallet.getDefaultAddress();
-          walletAddress = addressObj.addressId; // Extract the address string
-          console.log(`Default wallet address for agent ${agent.id}: ${walletAddress}`);
+        // Get balance using ethers.js provider
+        const provider = new ethers.providers.JsonRpcProvider('https://rpc.testnet.mantle.xyz');
+        const wallet = new ethers.Wallet(agent.wallet_seed, provider);
+        
+        // If we don't have a wallet address stored, get it from the wallet
+        if (!agent.wallet_address) {
+          agent.wallet_address = wallet.address;
+          console.log(`Default wallet address for agent ${agent.id}: ${agent.wallet_address}`);
           
           // Update the agent record with the wallet address
           await new Promise((resolve, reject) => {
             db.run('UPDATE agents SET wallet_address = ? WHERE id = ?', 
-              [walletAddress, agent.id], 
+              [agent.wallet_address, agent.id], 
               (err) => {
                 if (err) reject(err);
                 else resolve();
@@ -155,14 +261,11 @@ router.get('/:id', async (req, res) => {
           });
         }
         
-        // Fetch the ETH balance
-        const balance = await importedWallet.getBalance(Coinbase.assets.Eth);
-        walletBalance = balance.toString();
-        console.log(`Wallet balance for agent ${agent.id}: ${walletBalance} ETH`);
+        // Fetch the MNT balance using ethers.js provider
+        const balance = await provider.getBalance(agent.wallet_address);
+        walletBalance = ethers.utils.formatEther(balance);
+        console.log(`Wallet balance for agent ${agent.id}: ${walletBalance} MNT`);
         
-        // Also fetch all balances to see if there are other tokens
-        const allBalances = await importedWallet.listBalances();
-        console.log(`All wallet balances for agent ${agent.id}:`, JSON.stringify(allBalances));
       } catch (walletError) {
         console.error('Error fetching wallet details:', walletError);
         // Continue without balance if there's an error
@@ -176,14 +279,14 @@ router.get('/:id', async (req, res) => {
       ...agent,
       id: agent.id,
       is_running: Boolean(agent.is_running),
-      tools: agentTools, // Use the tools from agentToolService instead of parsing from agent.tools
+      tools: agentTools,
+      videos: videos,
       description: agent.personality || 'No description available',
       image_url: agent.image_url || null,
       created_at: agent.created_at || new Date().toISOString(),
       updated_at: agent.updated_at || new Date().toISOString(),
       wallet_address: walletAddress,
       wallet_balance: walletBalance,
-      // Format frequency in seconds for display
       frequency_seconds: agent.frequency ? Math.floor(agent.frequency / 1000) : 3600
     };
     res.json(formattedAgent);
@@ -204,7 +307,8 @@ router.post('/', async (req, res) => {
       model_name,
       frequency,
       telegram_bot_token,
-      tools
+      tools,
+      use_testnet = true
     } = req.body;
 
     if (!name || typeof name !== 'string') {
@@ -220,50 +324,19 @@ router.post('/', async (req, res) => {
       throw new Error('Database connection not established');
     }
 
-    // Create a wallet for the agent
+    // Create a Mantle wallet for the agent
     let wallet;
     try {
-      wallet = await Wallet.create({ networkId: Coinbase.networks.BaseSepolia });
-      console.log(`Wallet created for agent ${name} with ID: ${wallet.getId()}`);
+      wallet = await createMantleWallet(use_testnet);
+      const network = use_testnet ? MANTLE_NETWORKS.testnet : MANTLE_NETWORKS.mainnet;
       
-      // Get the default address
-      const defaultAddressObj = await wallet.getDefaultAddress();
-      console.log(`Default wallet address for agent ${name}: ${defaultAddressObj}`);
+      // Print wallet details to console for manual funding
+      console.log('=== New Agent Wallet Created ===');
+      console.log(`Network: ${network.name}`);
+      console.log(`Address: ${wallet.address}`);
+      console.log(`Explorer URL: ${network.explorer}/address/${wallet.address}`);
+      console.log('===============================');
       
-      // Extract the actual address string from the address object
-      console.log("defaultAddressObj: --- ", defaultAddressObj, JSON.stringify(defaultAddressObj))
-      
-      // Export wallet data (contains seed and ID)
-      const walletData = await wallet.export();
-      const walletId = walletData.walletId;
-
-      console.log(`Wallet data exported for agent ${name}`);
-      console.log(`Wallet data walletDatat ${walletData}`, JSON.stringify(walletData));
-      console.log(`Wallet ID: ${walletId}`);
-      console.log(`Wallet seed: ${walletData.seed}`);
-
-      // Fund the wallet with ETH from the faucet
-      console.log(`Requesting ETH from faucet for agent ${name}...`);
-      try {
-        // Create a faucet request that returns a Faucet transaction
-        let faucetTransaction = await wallet.faucet();
-        
-        // Wait for the faucet transaction to land on-chain
-        await faucetTransaction.wait();
-        
-        console.log(`Faucet transaction completed: ${faucetTransaction}`);
-        console.log(`Faucet transaction details: ${JSON.stringify(faucetTransaction)}`);
-        
-        // Get the updated balance after faucet funding
-        const ethBalance = await wallet.getBalance(Coinbase.assets.Eth);
-        console.log(`Wallet funded with ${ethBalance} ETH for agent ${name}`);
-      } catch (faucetError) {
-        console.error(`Error funding wallet from faucet: ${faucetError.message}`);
-        // Continue with wallet creation even if faucet fails
-      }
-      
-      const defaultAddress = defaultAddressObj.id;
-      console.log("defaultAddress ---ffff ", defaultAddress)
       // Simplified insertion approach
       const result = await new Promise((resolve, reject) => {
         db.run(`
@@ -282,9 +355,9 @@ router.post('/', async (req, res) => {
           0,
           now,
           now,
-          walletId, // Store wallet ID directly from wallet object
-          walletData.seed, // Store wallet seed from export data
-          defaultAddress // Store the address string, not the object
+          wallet.address,
+          wallet.privateKey,
+          wallet.address
         ], function(err) {
           if (err) {
             reject(err);
@@ -293,8 +366,6 @@ router.post('/', async (req, res) => {
           }
         });
       });
-
-      console.log('💾 Agent inserted into database, fetching newly created agent');
 
       // Get the newly created agent
       const agent = await new Promise((resolve, reject) => {
@@ -325,9 +396,8 @@ router.post('/', async (req, res) => {
           ...agent,
           is_running: Boolean(agent.is_running),
           tools: agent.tools ? JSON.parse(agent.tools) : [],
-          wallet_id: walletId, // Include wallet ID in response
-          wallet_address: defaultAddress, // Include wallet address in response
-          wallet_seed: walletData.seed // Include wallet seed in response
+          wallet_address: wallet.address,
+          network: use_testnet ? MANTLE_NETWORKS.testnet : MANTLE_NETWORKS.mainnet
         }
       });
     } catch (error) {
@@ -844,9 +914,8 @@ router.get('/:agentId/actions', async (req, res) => {
   }
 });
 
-// Add this new route after the other routes
-// Fund agent wallet from faucet
-router.post('/:id/fund', async (req, res) => {
+// Get agent balance
+router.get('/:id/balance', async (req, res) => {
   try {
     const agent = await new Promise((resolve, reject) => {
       db.get('SELECT * FROM agents WHERE id = ?', [req.params.id], (err, row) => {
@@ -865,75 +934,31 @@ router.post('/:id/fund', async (req, res) => {
       });
     }
     
-    if (!agent.wallet_seed || !agent.wallet_id) {
+    if (!agent.wallet_address) {
       return res.status(400).json({ 
         success: false,
         message: 'Agent does not have a wallet configured' 
       });
     }
     
-    // Re-instantiate the wallet using the stored data
-    const importedWallet = await Wallet.import({
-      walletId: agent.wallet_id,
-      seed: agent.wallet_seed,
-      networkId: Coinbase.networks.BaseSepolia
-    });
-    
-    console.log(`Wallet imported for agent ${agent.id} with ID: ${importedWallet.getId()}`);
-    
-    // Get initial balance for comparison
-    const initialBalance = await importedWallet.getBalance(Coinbase.assets.Eth);
-    console.log(`Initial wallet balance for agent ${agent.id}: ${initialBalance} ETH`);
-    
-    // Request ETH from the faucet
-    console.log(`Requesting ETH from faucet for agent ${agent.id}...`);
-    
-    // Create a faucet request that returns a Faucet transaction
-    let faucetTransaction = await importedWallet.faucet();
-    
-    // Wait for the faucet transaction to land on-chain
-    await faucetTransaction.wait();
-    
-    console.log(`Faucet transaction completed: ${faucetTransaction}`);
-    
-    // Get the updated balance after faucet funding
-    const newBalance = await importedWallet.getBalance(Coinbase.assets.Eth);
-    console.log(`Wallet funded with ${newBalance} ETH for agent ${agent.id}`);
+    const provider = getMantleProvider(true); // Always use testnet for now
+    const balance = await provider.getBalance(agent.wallet_address);
     
     res.json({
       success: true,
-      message: 'Agent wallet funded successfully',
       data: {
         agent_id: agent.id,
         wallet_address: agent.wallet_address,
-        previous_balance: initialBalance.toString(),
-        new_balance: newBalance.toString(),
-        transaction: faucetTransaction
+        balance: ethers.utils.formatEther(balance),
+        network: MANTLE_NETWORKS.testnet.name
       }
     });
   } catch (error) {
-    console.error('Error funding agent wallet:', error);
+    console.error('Error getting agent balance:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Failed to fund agent wallet',
+      message: 'Failed to get agent balance',
       error: error.message 
-    });
-  }
-});
-
-// Add a new route to get agent tools
-router.get('/:id/tools', async (req, res) => {
-  try {
-    const tools = await agentToolService.getAgentTools(req.params.id);
-    res.json({
-      success: true,
-      data: tools
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get agent tools',
-      error: error.message
     });
   }
 });

@@ -77,7 +77,19 @@ async function initializeApp() {
     try {
       Coinbase.configure({
         apiKeyName: process.env.COINBASE_API_KEY_NAME,
-        privateKey: process.env.COINBASE_API_PRIVATE_KEY
+        privateKey: process.env.COINBASE_API_PRIVATE_KEY,
+        // Configure for Mantle testnet
+        networkConfig: {
+          chainId: 5001,
+          chainName: 'Mantle Testnet',
+          nativeCurrency: {
+            name: 'MNT',
+            symbol: 'MNT',
+            decimals: 18
+          },
+          rpcUrls: ['https://rpc.testnet.mantle.xyz'],
+          blockExplorerUrls: ['https://explorer.testnet.mantle.xyz']
+        }
       });
       console.log('Coinbase SDK initialized successfully');
     } catch (error) {

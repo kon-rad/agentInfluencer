@@ -484,6 +484,153 @@ export const runMigrations = async () => {
             });
           });
         }
+      },
+      {
+        name: '013_add_create_short_form_video_tool',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              INSERT INTO agent_tools (
+                tool_name,
+                description,
+                parameters,
+                usage_format,
+                created_at,
+                updated_at
+              ) VALUES (?, ?, ?, ?, DATETIME('now'), DATETIME('now'))
+            `, [
+              'create_short_form_video',
+              'Creates a short-form video for social media marketing campaigns',
+              JSON.stringify({
+                prompt: 'string - Description of the video content to generate'
+              }),
+              'ACTION: create_short_form_video\nPARAMETERS: {"prompt": "Description of desired video content"}\nREASON: To generate engaging social media content'
+            ], (err) => {
+              if (err) {
+                console.error('Error adding create_short_form_video tool:', err);
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.run('DELETE FROM agent_tools WHERE tool_name = ?', ['create_short_form_video'], (err) => {
+              if (err) {
+                console.error('Error removing create_short_form_video tool:', err);
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        }
+      },
+      {
+        name: '013_create_agent_videos_table',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.run(`
+              CREATE TABLE IF NOT EXISTS agent_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER NOT NULL,
+                script TEXT NOT NULL,
+                scene_prompts TEXT NOT NULL,
+                video_url TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
+                metadata TEXT,
+                FOREIGN KEY (agent_id) REFERENCES agents (id)
+              )
+            `, (err) => {
+              if (err) {
+                console.error('Error creating agent_videos table:', err);
+                reject(err);
+                return;
+              }
+              resolve();
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.run('DROP TABLE IF EXISTS agent_videos', (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        }
+      },
+      {
+        name: '014_enhance_agent_videos_table',
+        up: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              // First create the video_scenes table
+              db.run(`
+                CREATE TABLE IF NOT EXISTS video_scenes (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  video_id INTEGER NOT NULL,
+                  scene_number INTEGER NOT NULL,
+                  prompt TEXT NOT NULL,
+                  status TEXT DEFAULT 'pending',
+                  video_url TEXT,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  completed_at DATETIME,
+                  error TEXT,
+                  FOREIGN KEY (video_id) REFERENCES agent_videos (id)
+                )
+              `, (err) => {
+                if (err) {
+                  console.error('Error creating video_scenes table:', err);
+                  reject(err);
+                  return;
+                }
+
+                // Add new columns to agent_videos table
+                db.run(`
+                  ALTER TABLE agent_videos 
+                  ADD COLUMN progress INTEGER DEFAULT 0
+                `, (err) => {
+                  if (err) {
+                    console.error('Error adding progress column to agent_videos:', err);
+                    reject(err);
+                    return;
+                  }
+
+                  db.run(`
+                    ALTER TABLE agent_videos 
+                    ADD COLUMN error TEXT
+                  `, (err) => {
+                    if (err) {
+                      console.error('Error adding error column to agent_videos:', err);
+                      reject(err);
+                      return;
+                    }
+                    resolve();
+                  });
+                });
+              });
+            });
+          });
+        },
+        down: async () => {
+          return new Promise((resolve, reject) => {
+            db.serialize(() => {
+              db.run('DROP TABLE IF EXISTS video_scenes', (err) => {
+                if (err) {
+                  console.error('Error dropping video_scenes table:', err);
+                  reject(err);
+                  return;
+                }
+                resolve();
+              });
+            });
+          });
+        }
       }
     ];
 

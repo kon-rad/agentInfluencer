@@ -1,5 +1,6 @@
 import db from '../database.js';
 import toolRegistryService from './toolRegistryService.js';
+import videoGenerationService from './videoGenerationService.js';
 
 class AgentToolService {
   constructor() {
@@ -78,4 +79,21 @@ class AgentToolService {
 
 // Create and export a singleton instance
 const agentToolService = new AgentToolService();
-export default agentToolService; 
+export default agentToolService;
+
+// Add this to your available tools array
+const availableTools = [
+  // ... existing tools ...
+  {
+    tool_name: 'create_short_form_video',
+    description: 'Creates a short-form video for social media marketing campaigns',
+    usage_format: 'Provide a prompt describing the video content you want to create',
+    parameters: JSON.stringify({
+      prompt: 'string - Description of the video content to generate'
+    }),
+    handler: async (agentId, params) => {
+      const { prompt } = params;
+      return await videoGenerationService.createVideo(agentId, prompt);
+    }
+  }
+]; 

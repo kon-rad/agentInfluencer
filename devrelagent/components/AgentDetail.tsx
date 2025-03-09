@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, ActivityIndicator, RefreshControl, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, ActivityIndicator, RefreshControl, Platform, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { useRouter } from 'expo-router';
@@ -28,6 +28,7 @@ interface Agent {
   wallet_id?: string;
   wallet_seed?: string;
   frequency_seconds?: number;
+  videos?: { id: number; status: string; progress: number; error?: string; video_url?: string; script: string; scenes: { id: number; scene_number: number; prompt: string; status: string; error?: string }[]; created_at: string; completed_at?: string }[];
 }
 
 interface News {
@@ -280,6 +281,9 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
           agent.tools.map((tool) => (
             <View key={tool.id} style={styles.toolItem}>
               <Text style={styles.toolName}>{tool.tool_name}</Text>
+              {tool.description && (
+                <Text style={styles.toolDescription}>{tool.description}</Text>
+              )}
             </View>
           ))
         ) : (
@@ -365,6 +369,79 @@ export default function AgentDetail({ agentId }: AgentDetailProps) {
             </Text>
           </View>
         ))}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Generated Videos</Text>
+        {agent.videos && agent.videos.length > 0 ? (
+          agent.videos.map((video) => (
+            <View key={video.id} style={styles.videoItem}>
+              <View style={styles.videoHeader}>
+                <Text style={styles.videoTitle}>Video #{video.id}</Text>
+                <Text style={styles.videoStatus}>{video.status}</Text>
+              </View>
+              
+              {video.status === 'processing' && (
+                <View style={styles.progressContainer}>
+                  <View style={[styles.progressBar, { width: `${video.progress}%` }]} />
+                  <Text style={styles.progressText}>{video.progress}%</Text>
+                </View>
+              )}
+
+              {video.error && (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>{video.error}</Text>
+                </View>
+              )}
+
+              {video.video_url && (
+                <TouchableOpacity 
+                  style={styles.videoPreview}
+                  onPress={() => video.video_url ? Linking.openURL(video.video_url) : null}
+                >
+                  <Ionicons name="play-circle" size={24} color="#1DA1F2" />
+                  <Text style={styles.videoLink}>View Video</Text>
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.videoDetails}>
+                <Text style={styles.videoLabel}>Script:</Text>
+                <Text style={styles.videoScript}>{video.script}</Text>
+                
+                <Text style={styles.videoLabel}>Scenes:</Text>
+                {video.scenes && video.scenes.map((scene) => (
+                  <View key={scene.id} style={styles.sceneItem}>
+                    <View style={styles.sceneHeader}>
+                      <Text style={styles.sceneNumber}>Scene {scene.scene_number}</Text>
+                      <Text style={[
+                        styles.sceneStatus,
+                        scene.status === 'completed' && styles.sceneStatusCompleted,
+                        scene.status === 'error' && styles.sceneStatusError
+                      ]}>
+                        {scene.status}
+                      </Text>
+                    </View>
+                    <Text style={styles.scenePrompt}>{scene.prompt}</Text>
+                    {scene.error && (
+                      <Text style={styles.sceneError}>{scene.error}</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+
+              <Text style={styles.videoTimestamp}>
+                Created: {new Date(video.created_at).toLocaleString()}
+              </Text>
+              {video.completed_at && (
+                <Text style={styles.videoTimestamp}>
+                  Completed: {new Date(video.completed_at).toLocaleString()}
+                </Text>
+              )}
+            </View>
+          ))
+        ) : (
+          <Text style={styles.noContent}>No videos generated yet</Text>
+        )}
       </View>
     </ScrollView>
   );
@@ -489,15 +566,19 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 15,
     marginBottom: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#1DA1F2',
   },
   toolName: {
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 4,
+    color: '#14171A',
   },
   toolDescription: {
     fontSize: 14,
     color: '#657786',
+    lineHeight: 20,
   },
   promptContainer: {
     backgroundColor: '#F8F9FA',
@@ -594,4 +675,116 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 15,
   },
+  videoItem: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 10,
+  },
+  videoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  videoTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  videoStatus: {
+    fontSize: 14,
+    color: '#657786',
+  },
+  progressContainer: {
+    height: 20,
+    backgroundColor: '#E1E8ED',
+    borderRadius: 10,
+    marginVertical: 10,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#1DA1F2',
+  },
+  progressText: {
+    position: 'absolute',
+    width: '100%',
+    textAlign: 'center',
+    color: '#FFFFFF',
+    fontSize: 12,
+    lineHeight: 20,
+  },
+  videoPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5FE',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 10,
+  },
+  videoLink: {
+    color: '#1DA1F2',
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  videoDetails: {
+    marginTop: 10,
+  },
+  videoLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  videoScript: {
+    fontSize: 14,
+    color: '#14171A',
+    marginBottom: 15,
+  },
+  sceneItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#1DA1F2',
+  },
+  sceneHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  sceneNumber: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  sceneStatus: {
+    fontSize: 12,
+    color: '#657786',
+  },
+  sceneStatusCompleted: {
+    color: '#17BF63',
+  },
+  sceneStatusError: {
+    color: '#E0245E',
+  },
+  scenePrompt: {
+    fontSize: 14,
+    color: '#14171A',
+  },
+  sceneError: {
+    fontSize: 12,
+    color: '#E0245E',
+    marginTop: 5,
+  },
+  videoTimestamp: {
+    fontSize: 12,
+    color: '#657786',
+    marginTop: 5,
+  },
+  noContent: {
+    fontSize: 14,
+    color: '#657786',
+    fontStyle: 'italic',
+  }
 }); 

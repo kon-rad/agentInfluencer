@@ -3,8 +3,32 @@ import newsAnalysisService from './newsAnalysisService.js';
 import twitterTrendService from './twitterTrendService.js';
 import twitterService from './twitterService.js';
 import telegramService from './telegramService.js';
-import pkg from '@coinbase/coinbase-sdk';
-const { Wallet, TimeoutError, Coinbase } = pkg;
+import { ethers } from 'ethers';
+import videoGenerationService from './videoGenerationService.js';
+
+// Mantle Network Configuration
+const MANTLE_NETWORKS = {
+  mainnet: {
+    chainId: 5000,
+    rpcUrl: 'https://rpc.mantle.xyz',
+    name: 'Mantle Mainnet',
+    symbol: 'MNT',
+    explorer: 'https://explorer.mantle.xyz'
+  },
+  testnet: {
+    chainId: 5001,
+    rpcUrl: 'https://rpc.testnet.mantle.xyz',
+    name: 'Mantle Testnet',
+    symbol: 'MNT',
+    explorer: 'https://explorer.testnet.mantle.xyz'
+  }
+};
+
+// Helper function to create Mantle provider
+const getMantleProvider = (isTestnet = true) => {
+  const network = isTestnet ? MANTLE_NETWORKS.testnet : MANTLE_NETWORKS.mainnet;
+  return new ethers.providers.JsonRpcProvider(network.rpcUrl);
+};
 
 class ToolRegistryService {
   constructor() {
@@ -24,6 +48,19 @@ class ToolRegistryService {
       usage_format: 'ACTION: NewsAnalysisTool\nPARAMETERS: {}\nREASON: To fetch and analyze recent Web3 news',
       execute: async (params = {}) => {
         return await newsAnalysisService.fetchLatestNews();
+      }
+    });
+
+    // Register create_short_form_video tool
+    await this.registerTool('create_short_form_video', {
+      description: 'Creates a short-form video for social media marketing campaigns',
+      parameters: {
+        prompt: 'string - Description of the video content to generate'
+      },
+      usage_format: 'ACTION: create_short_form_video\nPARAMETERS: {"prompt": "Description of desired video content"}\nREASON: To generate engaging social media content',
+      execute: async (params, agentId) => {
+        const { prompt } = params;
+        return await videoGenerationService.createVideo(agentId, prompt);
       }
     });
 
@@ -193,19 +230,18 @@ class ToolRegistryService {
 
     // Register the CryptoTransferTool
     await this.registerTool('CryptoTransferTool', {
-      description: "Sends a small amount of ETH (0.0000001) to a specified address using Coinbase SDK",
+      description: "Sends a small amount of MNT (0.0000001) to a specified address on Mantle network",
       parameters: {
         recipient_address: "string - Optional recipient address (defaults to 0xa01dD443827F88Ba34FefFA8949144BaB122D736 if not provided)",
-        network_id: "string - Optional network ID (defaults to 'base-sepolia')"
+        network_id: "string - Optional network ID (defaults to 'mantle-testnet')"
       },
       execute: async (params, agentId) => {
         try {
           // Extract parameters with defaults
           const recipientAddress = params.recipient_address || "0xa01dD443827F88Ba34FefFA8949144BaB122D736";
-          // Use 'base-sepolia' as the default network
-          const networkId = params.network_id || 'base-sepolia';
+          const networkId = params.network_id || 'mantle-testnet';
           
-          console.log(`Initiating crypto transfer of 0.0000001 ETH to ${recipientAddress} on ${networkId}`);
+          console.log(`Initiating crypto transfer of 0.0000001 MNT to ${recipientAddress} on ${networkId}`);
           
           // Get the agent to retrieve wallet information
           const agent = await this.getAgentById(agentId);
@@ -213,81 +249,45 @@ class ToolRegistryService {
             throw new Error(`Agent ${agentId} not found`);
           }
           
-          if (!agent.wallet_seed || !agent.wallet_id) {
+          if (!agent.wallet_seed || !agent.wallet_address) {
             throw new Error(`Agent ${agentId} does not have a wallet configured`);
           }
           
-          console.log("coinbase", Coinbase, JSON.stringify(Coinbase))
-          // Map the network ID to the corresponding Coinbase networks value
-          let coinbaseNetworkId;
-          switch(networkId) {
-            case 'base-sepolia':
-              coinbaseNetworkId = Coinbase.networks.BaseSepolia;
-              break;
-            case 'base-mainnet':
-              coinbaseNetworkId = Coinbase.networks.BaseMainnet;
-              break;
-            default:
-              coinbaseNetworkId = Coinbase.networks.BaseSepolia;
-          }
+          // Determine if we're using testnet
+          const isTestnet = networkId === 'mantle-testnet';
+          const provider = getMantleProvider(isTestnet);
           
-          // Import the agent's existing wallet using the stored data
-          const wallet = await Wallet.import({
-            walletId: agent.wallet_id,
-            seed: agent.wallet_seed,
-            networkId: coinbaseNetworkId
-          });
+          // Create wallet instance from private key
+          const wallet = new ethers.Wallet(agent.wallet_seed, provider);
           
           // Get the wallet address
-          let walletAddress = agent.wallet_address;
-          if (!walletAddress) {
-            const addressObj = await wallet.getDefaultAddress();
-            walletAddress = addressObj.addressId || addressObj.id;
-            console.log(`Retrieved default wallet address: ${walletAddress}`);
-          }
+          const walletAddress = wallet.address;
           console.log(`Sending from wallet address: ${walletAddress}`);
           
           // Check the wallet balance before attempting the transfer
-          const balance = await wallet.getBalance(Coinbase.assets.Eth);
-          console.log(`Current wallet balance: ${balance} ETH`);
+          const balance = await provider.getBalance(walletAddress);
+          console.log(`Current wallet balance: ${ethers.utils.formatEther(balance)} MNT`);
           
-          if (balance < 0.0000001) {
-            throw new Error(`Insufficient funds: ${balance} ETH available, but 0.0000001 ETH required`);
+          const transferAmount = ethers.utils.parseEther('0.0000001');
+          if (balance.lt(transferAmount)) {
+            throw new Error(`Insufficient funds: ${ethers.utils.formatEther(balance)} MNT available, but 0.0000001 MNT required`);
           }
           
-          // Get the wallet's default address object to use for creating the transfer
-          const defaultAddressObj = await wallet.getDefaultAddress();
-          
-          // Create the transfer using the wallet's address
-          const transfer = await defaultAddressObj.createTransfer({
-            amount: 0.0000001,
-            assetId: Coinbase.assets.Eth,
-            destination: recipientAddress
+          // Create and send the transaction
+          const tx = await wallet.sendTransaction({
+            to: recipientAddress,
+            value: transferAmount
           });
           
-          console.log(`Transfer initiated with ID: ${transfer.id}`);
+          console.log(`Transaction sent with hash: ${tx.hash}`);
           
-          // Wait for the transfer to settle
-          let transferCompleted = false;
-          try {
-            await transfer.wait();
-            transferCompleted = true;
-          } catch (err) {
-            if (err instanceof TimeoutError) {
-              console.log("Waiting for transfer timed out, but transfer might still complete");
-            } else {
-              console.error("Error while waiting for transfer to complete:", err);
-              throw new Error(`Transfer failed: ${err.message}`);
-            }
-          }
-          
-          // Check transfer status
-          const status = transfer.getStatus();
-          console.log(`Transfer status: ${status}`);
+          // Wait for the transaction to be mined
+          const receipt = await tx.wait();
+          console.log(`Transaction confirmed in block ${receipt.blockNumber}`);
           
           // Get the updated balance after transfer
-          const balanceAfter = await wallet.getBalance(Coinbase.assets.Eth);
-          console.log(`Wallet balance after transfer: ${balanceAfter} ETH`);
+          const balanceAfter = await provider.getBalance(walletAddress);
+          console.log(`Wallet balance after transfer: ${ethers.utils.formatEther(balanceAfter)} MNT`);
           
           // Log the transaction in the agent_actions table
           await new Promise((resolve, reject) => {
@@ -301,18 +301,18 @@ class ToolRegistryService {
                 JSON.stringify({
                   recipient_address: recipientAddress,
                   network_id: networkId,
-                  amount: 0.0000001,
-                  asset: 'ETH'
+                  amount: '0.0000001',
+                  asset: 'MNT'
                 }),
-                status,
+                'complete',
                 JSON.stringify({
-                  transfer_id: transfer.id,
+                  transaction_hash: tx.hash,
                   from_address: walletAddress,
                   to_address: recipientAddress,
                   network: networkId,
-                  completed: transferCompleted,
-                  balance_before: balance.toString(),
-                  balance_after: balanceAfter.toString()
+                  block_number: receipt.blockNumber,
+                  balance_before: ethers.utils.formatEther(balance),
+                  balance_after: ethers.utils.formatEther(balanceAfter)
                 }),
                 new Date().toISOString(),
                 new Date().toISOString()
@@ -329,19 +329,18 @@ class ToolRegistryService {
           });
           
           return {
-            success: status === 'complete',
-            transfer_id: transfer.id,
-            status: status,
+            success: true,
+            transaction_hash: tx.hash,
+            status: 'complete',
             from_address: walletAddress,
             to_address: recipientAddress,
-            amount: 0.0000001,
-            asset: "ETH",
+            amount: '0.0000001',
+            asset: "MNT",
             network: networkId,
-            balance_before: balance.toString(),
-            balance_after: balanceAfter.toString(),
-            message: status === 'complete' ? 
-              "Transfer completed successfully" : 
-              "Transfer status: " + status
+            block_number: receipt.blockNumber,
+            balance_before: ethers.utils.formatEther(balance),
+            balance_after: ethers.utils.formatEther(balanceAfter),
+            message: "Transfer completed successfully"
           };
         } catch (error) {
           console.error("Error sending crypto transfer:", error);
@@ -355,9 +354,8 @@ class ToolRegistryService {
               if (agent) {
                 agentInfo = {
                   agent_id: agent.id,
-                  wallet_id: agent.wallet_id,
-                  has_wallet_seed: !!agent.wallet_seed,
-                  wallet_address: agent.wallet_address
+                  wallet_address: agent.wallet_address,
+                  has_wallet_seed: !!agent.wallet_seed
                 };
               }
             } catch (agentError) {
@@ -374,9 +372,9 @@ class ToolRegistryService {
                   'CryptoTransferTool', 
                   JSON.stringify({
                     recipient_address: params.recipient_address || "0xa01dD443827F88Ba34FefFA8949144BaB122D736",
-                    network_id: params.network_id || 'base-sepolia',
-                    amount: 0.0000001,
-                    asset: 'ETH'
+                    network_id: params.network_id || 'mantle-testnet',
+                    amount: '0.0000001',
+                    asset: 'MNT'
                   }),
                   'failed',
                   JSON.stringify({
